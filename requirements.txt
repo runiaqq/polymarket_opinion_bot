@@ -1,0 +1,10 @@
+aiohttp
+websockets
+pyyaml
+python-dotenv
+aiosqlite
+asyncpg
+pytest
+pytest-asyncio
+aioresponses
+

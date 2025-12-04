@@ -1,0 +1,2 @@
+"""Telegram notifier integration."""
+

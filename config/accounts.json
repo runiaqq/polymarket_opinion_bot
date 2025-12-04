@@ -1,0 +1,21 @@
+{
+  "accounts": [
+    {
+      "account_id": "opinion_acc",
+      "exchange": "Opinion",
+      "api_key": "OPINION_API_KEY",
+      "secret_key": "OPINION_SECRET",
+      "proxy": "http://user:pass@host:port",
+      "metadata": {}
+    },
+    {
+      "account_id": "poly_acc",
+      "exchange": "Polymarket",
+      "api_key": "POLYMARKET_API_KEY",
+      "secret_key": "POLYMARKET_SECRET",
+      "proxy": "http://user:pass@host:port",
+      "metadata": {}
+    }
+  ]
+}
+

@@ -1,0 +1,52 @@
+market_hedge_mode:
+  enabled: true
+  hedge_ratio: 1.0
+  max_slippage_market_hedge: 0.005
+  min_spread_for_entry: 0.002
+  max_position_size_per_market: 50000
+  max_position_size_per_event: 200000
+  cancel_unfilled_after_ms: 60000
+  allow_partial_fill_hedge: true
+  hedge_strategy: "FULL"
+  max_slippage_percent: 0.05
+  min_quote_size: 100
+  exposure_tolerance: 5
+
+exchanges:
+  primary: "Opinion"
+  secondary: "Polymarket"
+
+dry_run: true
+
+database:
+  backend: "sqlite"
+  dsn: "sqlite+aiosqlite:///./data/market_hedge.db"
+
+telegram:
+  enabled: false
+  token: ""
+  chat_id: ""
+
+rate_limits:
+  Opinion:
+    requests_per_minute: 120
+    burst: 5
+  Polymarket:
+    requests_per_minute: 120
+    burst: 5
+
+connectivity:
+  Opinion:
+    use_websocket: true
+    poll_interval: 2
+  Polymarket:
+    use_websocket: false
+    poll_interval: 5
+
+market_pairs:
+  - event_id: "event-001"
+    primary_market_id: "opinion_token_yes"
+    secondary_market_id: "polymarket_market_id"
+    primary_account_id: "opinion_acc"
+    secondary_account_id: "poly_acc"
+
