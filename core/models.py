@@ -30,6 +30,12 @@ class ExchangeName(str, Enum):
     OPINION = "Opinion"
 
 
+class DoubleLimitState(str, Enum):
+    ACTIVE = "ACTIVE"
+    TRIGGERED = "TRIGGERED"
+    COMPLETED = "COMPLETED"
+
+
 @dataclass(slots=True)
 class OrderBookEntry:
     price: float
@@ -110,4 +116,10 @@ class AccountCredentials:
     secret_key: str
     proxy: Optional[str] = None
     metadata: Dict[str, str] = field(default_factory=dict)
+    weight: float = 1.0
+    tokens_per_sec: float = 5.0
+    burst: int = 10
+    weight: float = 1.0
+    tokens_per_sec: float = 5.0
+    burst: int = 10
 

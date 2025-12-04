@@ -27,6 +27,25 @@ CREATE TABLE IF NOT EXISTS orders (
     raw TEXT
 );
 
+CREATE TABLE IF NOT EXISTS double_limits (
+    id TEXT PRIMARY KEY,
+    pair_key TEXT NOT NULL,
+    order_a_ref TEXT NOT NULL,
+    order_b_ref TEXT NOT NULL,
+    order_a_exchange TEXT NOT NULL,
+    order_b_exchange TEXT NOT NULL,
+    client_order_id_a TEXT NOT NULL,
+    client_order_id_b TEXT NOT NULL,
+    state TEXT NOT NULL,
+    triggered_order_id TEXT,
+    cancelled_order_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_double_limits_order_a ON double_limits(order_a_ref);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_double_limits_order_b ON double_limits(order_b_ref);
+
 CREATE TABLE IF NOT EXISTS fills (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     order_id TEXT NOT NULL,
@@ -61,4 +80,14 @@ CREATE TABLE IF NOT EXISTS incidents (
     details TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS order_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    payload TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_order_events_order_id ON order_events(order_id);
 

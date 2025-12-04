@@ -4,6 +4,7 @@ import asyncio
 from contextlib import suppress
 from typing import Dict, List
 
+from aiohttp import web
 from core.hedger import Hedger
 from core.market_mapper import MarketMapper
 from core.models import AccountCredentials, ExchangeName, OrderSide
@@ -27,6 +28,7 @@ from utils.config_loader import (
 )
 from utils.db import Database
 from utils.db_migrations import apply_migrations
+from utils.google_sheets import GoogleSheetsSync, MarketPairStore
 from utils.logger import BotLogger
 from utils.proxy_handler import ProxyHandler
 
@@ -110,6 +112,8 @@ async def main() -> None:
     accounts = loader.load_accounts()
 
     logger = BotLogger("market_hedge")
+    pair_store = MarketPairStore(settings.market_pairs)
+    sheet_sync = GoogleSheetsSync(settings.google_sheets, logger) if settings.google_sheets.enabled else None
     await apply_migrations(settings.database)
     db = Database(settings.database, logger=logger)
     await db.init()
@@ -231,6 +235,21 @@ async def main() -> None:
             )
         )
 
+    webhook_runner = None
+    if settings.webhook.enabled:
+        from scripts.webhook_server import create_app
+
+        app = await create_app(pair_store, sheet_sync, settings.webhook.admin_token or "")
+        webhook_runner = web.AppRunner(app)
+        await webhook_runner.setup()
+        site = web.TCPSite(webhook_runner, settings.webhook.host, settings.webhook.port)
+        await site.start()
+        logger.info(
+            "webhook server started",
+            host=settings.webhook.host,
+            port=settings.webhook.port,
+        )
+
     async def dispatch_fill(fill):
         for manager in order_managers:
             if fill.market_id in manager.market_map.values():
@@ -277,6 +296,10 @@ async def main() -> None:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
+        if webhook_runner:
+            await webhook_runner.cleanup()
+        if sheet_sync:
+            await sheet_sync.close()
         for client in set(clients.values()):
             close = getattr(client, "close", None)
             if close:

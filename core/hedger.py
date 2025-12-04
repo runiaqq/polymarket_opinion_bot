@@ -50,6 +50,7 @@ class Hedger:
             self.strategy = HedgeStrategy(self.config.hedge_strategy.upper())
         except Exception:
             self.strategy = HedgeStrategy.FULL
+        self.ultra_safe = bool(getattr(self.config, "ultra_safe", False))
 
     async def hedge(
         self,
@@ -138,20 +139,27 @@ class Hedger:
         orderbook = await request.client.get_orderbook(request.market_id)
         target_size = leg_size
         avg_price, slippage = self.orderbooks.estimate_slippage(orderbook, side, target_size)
-        try:
-            await self.risk_manager.check_slippage(
-                abs(slippage),
-                self.config.max_slippage_market_hedge,
+        max_slippage = self.config.max_slippage_market_hedge
+        if abs(slippage) > max_slippage:
+            if self.ultra_safe:
+                await self._handle_ultra_safe_skip(request, side, target_size, abs(slippage), max_slippage)
+                raise HedgingError("ultra-safe slippage guard triggered")
+            reduced_size = self._reduce_size(orderbook, side, target_size)
+            if reduced_size <= 0:
+                raise HedgingError("insufficient liquidity within slippage constraints")
+            self.logger.warn(
+                "hedge size reduced due to slippage",
+                market_id=request.market_id,
+                exchange=request.exchange.value,
+                requested=target_size,
+                reduced=reduced_size,
             )
-        except RiskCheckError:
-            target_size = self._reduce_size(orderbook, side, target_size)
-            if target_size <= 0:
-                raise
+            target_size = reduced_size
             avg_price, slippage = self.orderbooks.estimate_slippage(orderbook, side, target_size)
-            await self.risk_manager.check_slippage(
-                abs(slippage),
-                self.config.max_slippage_market_hedge,
-            )
+        await self.risk_manager.check_slippage(
+            abs(slippage),
+            max_slippage,
+        )
         if self.dry_run:
             order_id = "dry-run"
         else:
@@ -187,4 +195,26 @@ class Hedger:
         await self.db.record_incident("ERROR", message, details)
         await self.notifier.send_message(f"[Hedge Failure] {message}: {details}")
         self.logger.error(message, **details)
+
+    async def _handle_ultra_safe_skip(
+        self,
+        request: HedgeLegRequest,
+        side: OrderSide,
+        leg_size: float,
+        observed_slippage: float,
+        max_slippage: float,
+    ) -> None:
+        details = {
+            "exchange": request.exchange.value,
+            "market_id": request.market_id,
+            "side": side.value,
+            "size": leg_size,
+            "observed_slippage": observed_slippage,
+            "threshold": max_slippage,
+        }
+        self.logger.warn("ultra-safe hedge skipped", **details)
+        await self.db.record_incident("WARNING", "ultra_safe_slippage_skip", details)
+        await self.notifier.send_message(
+            f"[Ultra Safe] Hedge skipped on {request.exchange.value} ({request.market_id}) due to slippage {observed_slippage:.6f}"
+        )
 

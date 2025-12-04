@@ -66,6 +66,34 @@ class OpinionAPI(BaseExchangeClient):
         ]
         return self.orderbooks.parse_orderbook(token_id, bids, asks)
 
+    async def place_limit_order(
+        self,
+        market_id: str,
+        side: OrderSide,
+        price: float,
+        size: float,
+        client_order_id: Optional[str] = None,
+    ) -> Order:
+        token_id = str(market_id)
+        numeric_market_id: Optional[int] = None
+        try:
+            numeric_market_id = int(token_id)
+        except ValueError:
+            market = await self.get_market(token_id)
+            try:
+                numeric_market_id = int(market.market_id)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("opinion market id must be numeric") from exc
+        return await self.place_order(
+            market_id=numeric_market_id,
+            token_id=token_id,
+            side=side,
+            order_type=OrderType.LIMIT,
+            price=price,
+            quote_amount=size,
+            client_order_id=client_order_id,
+        )
+
     async def place_order(
         self,
         market_id: int,
@@ -91,8 +119,15 @@ class OpinionAPI(BaseExchangeClient):
         data = await self._api_request("POST", "/orders", payload=payload, auth=True)
         return self._parse_order(data.get("data", data))
 
-    async def cancel_order(self, order_id: str) -> bool:
-        await self._api_request("DELETE", f"/orders/{order_id}", auth=True)
+    async def cancel_order(
+        self,
+        order_id: str | None = None,
+        client_order_id: str | None = None,
+    ) -> bool:
+        identifier = order_id or client_order_id
+        if not identifier:
+            raise ValueError("order_id or client_order_id is required")
+        await self._api_request("DELETE", f"/orders/{identifier}", auth=True)
         return True
 
     async def get_balances(self) -> Dict[str, float]:

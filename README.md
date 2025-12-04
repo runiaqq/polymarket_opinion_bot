@@ -90,7 +90,8 @@ Stop the bot with `CTRL+C`. The shutdown hook drains tasks, closes websockets, s
 ## Testing
 
 ```bash
-pytest
+make test          # runs pytest -q (fast suite, skips stress)
+make test-stress   # runs pytest -q -m stress
 ```
 
 Tests rely purely on mocks/fixtures (no external API calls) and cover:
@@ -101,6 +102,8 @@ Tests rely purely on mocks/fixtures (no external API calls) and cover:
 - OrderManager fill routing and hedge triggering
 - API client payload normalization for both venues
 - Reconciliation layer (websocket + poll dedupe)
+- Webhook + Google Sheets sync endpoints
+- Stress harness with 100+ mock accounts (marked `@pytest.mark.stress`)
 
 ### End-to-End Harness
 

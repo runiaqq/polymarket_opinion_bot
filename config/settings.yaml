@@ -43,6 +43,24 @@ connectivity:
     use_websocket: false
     poll_interval: 5
 
+google_sheets:
+  enabled: false
+  sheet_id: ""
+  range: "Sheet1!A1:F100"
+  poll_interval_sec: 60
+  credentials_path: ""
+  mode: "service_account"
+  api_key: ""
+
+scheduler:
+  policy: "round_robin"
+
+webhook:
+  enabled: false
+  host: "0.0.0.0"
+  port: 8081
+  admin_token: ""
+
 market_pairs:
   - event_id: "event-001"
     primary_market_id: "opinion_token_yes"

@@ -10,6 +10,7 @@ from utils.logger import BotLogger
 class OrderFSMState(Enum):
     NEW = "NEW"
     PLACED = "PLACED"
+    DOUBLE_LIMIT = "DOUBLE_LIMIT"
     PARTIALLY_FILLED = "PARTIALLY_FILLED"
     FILLED = "FILLED"
     CANCELLING = "CANCELLING"
@@ -20,6 +21,7 @@ class OrderFSMState(Enum):
 class OrderFSMEvent(Enum):
     PLACE = "PLACE"
     ACK = "ACK"
+    DOUBLE_LINKED = "DOUBLE_LINKED"
     FILL_PARTIAL = "FILL_PARTIAL"
     FILL_FULL = "FILL_FULL"
     CANCEL_REQUEST = "CANCEL_REQUEST"
@@ -40,6 +42,13 @@ class OrderStateMachine:
             OrderFSMEvent.ERROR: OrderFSMState.FAILED,
         },
         OrderFSMState.PLACED: {
+            OrderFSMEvent.DOUBLE_LINKED: OrderFSMState.DOUBLE_LIMIT,
+            OrderFSMEvent.FILL_PARTIAL: OrderFSMState.PARTIALLY_FILLED,
+            OrderFSMEvent.FILL_FULL: OrderFSMState.FILLED,
+            OrderFSMEvent.CANCEL_REQUEST: OrderFSMState.CANCELLING,
+            OrderFSMEvent.ERROR: OrderFSMState.FAILED,
+        },
+        OrderFSMState.DOUBLE_LIMIT: {
             OrderFSMEvent.FILL_PARTIAL: OrderFSMState.PARTIALLY_FILLED,
             OrderFSMEvent.FILL_FULL: OrderFSMState.FILLED,
             OrderFSMEvent.CANCEL_REQUEST: OrderFSMState.CANCELLING,
@@ -64,6 +73,7 @@ class OrderStateMachine:
     _STATUS_MAP: Dict[OrderFSMState, OrderStatus] = {
         OrderFSMState.NEW: OrderStatus.PENDING,
         OrderFSMState.PLACED: OrderStatus.OPEN,
+        OrderFSMState.DOUBLE_LIMIT: OrderStatus.OPEN,
         OrderFSMState.PARTIALLY_FILLED: OrderStatus.PARTIALLY_FILLED,
         OrderFSMState.FILLED: OrderStatus.FILLED,
         OrderFSMState.CANCELLING: OrderStatus.CANCELED,

@@ -55,3 +55,11 @@ async def test_fsm_callbacks_invoked():
 
     assert called and called[0][0] == OrderFSMState.FILLED
 
+
+@pytest.mark.asyncio
+async def test_fsm_double_limit_transition():
+    db = DummyDB()
+    fsm = OrderStateMachine("ord-4", db)
+    await fsm.transition(OrderFSMEvent.PLACE)
+    await fsm.transition(OrderFSMEvent.DOUBLE_LINKED)
+    assert fsm.current_state == OrderFSMState.DOUBLE_LIMIT

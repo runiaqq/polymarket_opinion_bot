@@ -12,6 +12,7 @@ import aiosqlite
 import asyncpg
 
 from core.models import (
+    DoubleLimitState,
     Order as LegacyOrder,
     OrderStatus,
     Trade as LegacyTrade,
@@ -76,6 +77,128 @@ class Database:
                 "filled_size": str(order.filled_size),
                 "status": order.status,
                 "ts": order.ts.isoformat(),
+            },
+        )
+
+    async def log_order_event(
+        self,
+        order_id: str,
+        stage: str,
+        payload: Dict[str, Any] | None = None,
+    ) -> None:
+        payload = payload or {}
+        await self._execute(
+            """
+            INSERT INTO order_events (order_id, stage, payload)
+            VALUES (:order_id, :stage, :payload)
+            """,
+            {
+                "order_id": order_id,
+                "stage": stage,
+                "payload": json.dumps(payload, default=str),
+            },
+        )
+    async def save_double_limit_pair(
+        self,
+        record_id: str,
+        pair_key: str,
+        primary_order_ref: str,
+        secondary_order_ref: str,
+        primary_exchange: str,
+        secondary_exchange: str,
+        primary_client_order_id: str,
+        secondary_client_order_id: str,
+        state: DoubleLimitState = DoubleLimitState.ACTIVE,
+    ) -> None:
+        now = datetime.now(tz=timezone.utc).isoformat()
+        sql = """
+        INSERT INTO double_limits (
+            id,
+            pair_key,
+            order_a_ref,
+            order_b_ref,
+            order_a_exchange,
+            order_b_exchange,
+            client_order_id_a,
+            client_order_id_b,
+            state,
+            created_at,
+            updated_at
+        ) VALUES (
+            :id,
+            :pair_key,
+            :order_a_ref,
+            :order_b_ref,
+            :order_a_exchange,
+            :order_b_exchange,
+            :client_order_id_a,
+            :client_order_id_b,
+            :state,
+            :created_at,
+            :updated_at
+        )
+        """
+        await self._execute(
+            sql,
+            {
+                "id": record_id,
+                "pair_key": pair_key,
+                "order_a_ref": primary_order_ref,
+                "order_b_ref": secondary_order_ref,
+                "order_a_exchange": primary_exchange,
+                "order_b_exchange": secondary_exchange,
+                "client_order_id_a": primary_client_order_id,
+                "client_order_id_b": secondary_client_order_id,
+                "state": state.value,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+
+    async def get_double_limit_by_order(self, order_ref: str) -> Optional[Dict[str, Any]]:
+        row = await self._fetchone(
+            """
+            SELECT *
+            FROM double_limits
+            WHERE order_a_ref = :order_ref
+               OR order_b_ref = :order_ref
+               OR client_order_id_a = :order_ref
+               OR client_order_id_b = :order_ref
+            LIMIT 1
+            """,
+            {"order_ref": order_ref},
+        )
+        return row
+
+    async def update_double_limit_state(
+        self,
+        record_id: str,
+        state: DoubleLimitState,
+        triggered_order_id: Optional[str] = None,
+        cancelled_order_id: Optional[str] = None,
+    ) -> None:
+        await self._execute(
+            """
+            UPDATE double_limits
+            SET
+                state = :state,
+                triggered_order_id = CASE
+                    WHEN :triggered_order_id IS NOT NULL THEN :triggered_order_id
+                    ELSE triggered_order_id
+                END,
+                cancelled_order_id = CASE
+                    WHEN :cancelled_order_id IS NOT NULL THEN :cancelled_order_id
+                    ELSE cancelled_order_id
+                END,
+                updated_at = :updated_at
+            WHERE id = :id
+            """,
+            {
+                "id": record_id,
+                "state": state.value,
+                "triggered_order_id": triggered_order_id,
+                "cancelled_order_id": cancelled_order_id,
+                "updated_at": datetime.now(tz=timezone.utc).isoformat(),
             },
         )
 

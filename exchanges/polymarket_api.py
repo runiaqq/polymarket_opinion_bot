@@ -95,8 +95,15 @@ class PolymarketAPI(BaseExchangeClient):
         data = await self._request("POST", "/orders", payload=payload)
         return self._parse_order(data)
 
-    async def cancel_order(self, order_id: str) -> bool:
-        await self._request("DELETE", f"/orders/{order_id}")
+    async def cancel_order(
+        self,
+        order_id: str | None = None,
+        client_order_id: str | None = None,
+    ) -> bool:
+        identifier = order_id or client_order_id
+        if not identifier:
+            raise ValueError("order_id or client_order_id is required")
+        await self._request("DELETE", f"/orders/{identifier}")
         return True
 
     async def get_order_status(self, order_id: str) -> Order:

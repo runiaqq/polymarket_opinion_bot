@@ -6,7 +6,10 @@
       "api_key": "OPINION_API_KEY",
       "secret_key": "OPINION_SECRET",
       "proxy": "http://user:pass@host:port",
-      "metadata": {}
+      "metadata": {},
+      "weight": 1.0,
+      "tokens_per_sec": 5,
+      "burst": 10
     },
     {
       "account_id": "poly_acc",
@@ -14,7 +17,10 @@
       "api_key": "POLYMARKET_API_KEY",
       "secret_key": "POLYMARKET_SECRET",
       "proxy": "http://user:pass@host:port",
-      "metadata": {}
+      "metadata": {},
+      "weight": 1.0,
+      "tokens_per_sec": 5,
+      "burst": 10
     }
   ]
 }

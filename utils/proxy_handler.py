@@ -16,12 +16,14 @@ class ProxyHandler:
         self.logger = logger or BotLogger(__name__)
         self._sessions: Dict[str, aiohttp.ClientSession] = {}
         self._proxies: Dict[str, Optional[str]] = {}
-        self._lock = asyncio.Lock()
+        self._locks: Dict[str, asyncio.Lock] = {}
 
     async def get_session(self, account: AccountCredentials) -> aiohttp.ClientSession:
-        async with self._lock:
-            if account.account_id in self._sessions:
-                return self._sessions[account.account_id]
+        lock = self._locks.setdefault(account.account_id, asyncio.Lock())
+        async with lock:
+            session = self._sessions.get(account.account_id)
+            if session and not session.closed:
+                return session
             timeout = aiohttp.ClientTimeout(total=30)
             connector = aiohttp.TCPConnector(limit=100, ssl=False)
             session = aiohttp.ClientSession(
@@ -42,11 +44,8 @@ class ProxyHandler:
         return self._proxies.get(account_id)
 
     async def close(self) -> None:
-        async with self._lock:
-            await asyncio.gather(
-                *(session.close() for session in self._sessions.values()),
-                return_exceptions=True,
-            )
-            self._sessions.clear()
-            self._proxies.clear()
+        await asyncio.gather(*(session.close() for session in self._sessions.values()), return_exceptions=True)
+        self._sessions.clear()
+        self._proxies.clear()
+        self._locks.clear()
 

@@ -24,12 +24,19 @@ class MarketHedgeConfig:
     max_slippage_percent: float = 0.05
     min_quote_size: float = 0.0
     exposure_tolerance: float = 0.0
+    ultra_safe: bool = False
 
 
 @dataclass(slots=True)
 class ExchangeRoutingConfig:
     primary: ExchangeName
     secondary: ExchangeName
+
+
+@dataclass(slots=True)
+class FeeConfig:
+    maker: float = 0.0
+    taker: float = 0.0
 
 
 @dataclass(slots=True)
@@ -58,18 +65,47 @@ class ExchangeConnectivity:
 
 
 @dataclass(slots=True)
+class GoogleSheetsConfig:
+    enabled: bool = False
+    sheet_id: str | None = None
+    range: str = "Sheet1!A1:F100"
+    poll_interval_sec: int = 60
+    credentials_path: str | None = None
+    mode: str = "service_account"
+    api_key: str | None = None
+
+
+@dataclass(slots=True)
+class WebhookConfig:
+    enabled: bool = False
+    host: str = "0.0.0.0"
+    port: int = 8081
+    admin_token: str = ""
+
+
+@dataclass(slots=True)
 class MarketPairConfig:
     event_id: str
     primary_market_id: str
     secondary_market_id: str
     primary_account_id: str | None = None
     secondary_account_id: str | None = None
+    pair_id: str | None = None
+    strategy: str | None = None
+    max_position_size_per_market: float | None = None
+    primary_exchange: ExchangeName | None = None
+    secondary_exchange: ExchangeName | None = None
 
 
 @dataclass(slots=True)
 class Settings:
     market_hedge_mode: MarketHedgeConfig
+    double_limit_enabled: bool
     exchanges: ExchangeRoutingConfig
+    fees: Dict[ExchangeName, FeeConfig]
+    google_sheets: GoogleSheetsConfig
+    webhook: WebhookConfig
+    scheduler_policy: str
     dry_run: bool
     telegram: TelegramConfig
     database: DatabaseConfig
@@ -108,6 +144,9 @@ class ConfigLoader:
                     secret_key=entry.get("secret_key", ""),
                     proxy=entry.get("proxy"),
                     metadata=entry.get("metadata", {}),
+                    weight=float(entry.get("weight", 1.0)),
+                    tokens_per_sec=float(entry.get("tokens_per_sec", 5.0)),
+                    burst=int(entry.get("burst", 10)),
                 )
             )
         return accounts
@@ -143,6 +182,7 @@ class ConfigLoader:
             max_slippage_percent=float(market_cfg.get("max_slippage_percent", 0.05)),
             min_quote_size=float(market_cfg.get("min_quote_size", 0.0)),
             exposure_tolerance=float(market_cfg.get("exposure_tolerance", 0.0)),
+            ultra_safe=bool(market_cfg.get("ultra_safe", False)),
         )
 
         exchanges = ExchangeRoutingConfig(
@@ -172,6 +212,16 @@ class ConfigLoader:
         for item in raw.get("market_pairs", []):
             if {"event_id", "primary_market_id", "secondary_market_id"} - item.keys():
                 continue
+            primary_exchange = item.get("primary_exchange")
+            secondary_exchange = item.get("secondary_exchange")
+            try:
+                primary_exchange_enum = ExchangeName(primary_exchange) if primary_exchange else None
+            except ValueError:
+                primary_exchange_enum = None
+            try:
+                secondary_exchange_enum = ExchangeName(secondary_exchange) if secondary_exchange else None
+            except ValueError:
+                secondary_exchange_enum = None
             pairs.append(
                 MarketPairConfig(
                     event_id=item["event_id"],
@@ -179,6 +229,8 @@ class ConfigLoader:
                     secondary_market_id=item["secondary_market_id"],
                     primary_account_id=item.get("primary_account_id"),
                     secondary_account_id=item.get("secondary_account_id"),
+                    primary_exchange=primary_exchange_enum,
+                    secondary_exchange=secondary_exchange_enum,
                 )
             )
 
@@ -193,14 +245,49 @@ class ConfigLoader:
                 poll_interval=float(cfg.get("poll_interval", 5.0)),
             )
 
+        fees: Dict[ExchangeName, FeeConfig] = {}
+        for name, cfg in raw.get("fees", {}).items():
+            try:
+                exchange_name = ExchangeName(name)
+            except ValueError:
+                continue
+            fees[exchange_name] = FeeConfig(
+                maker=float(cfg.get("maker", 0.0)),
+                taker=float(cfg.get("taker", 0.0)),
+            )
+
+        sheets_cfg = raw.get("google_sheets", {})
+        google_sheets = GoogleSheetsConfig(
+            enabled=bool(sheets_cfg.get("enabled", False)),
+            sheet_id=sheets_cfg.get("sheet_id"),
+            range=str(sheets_cfg.get("range", "Sheet1!A1:F100")),
+            poll_interval_sec=int(sheets_cfg.get("poll_interval_sec", 60)),
+            credentials_path=sheets_cfg.get("credentials_path"),
+            mode=str(sheets_cfg.get("mode", "service_account")),
+            api_key=sheets_cfg.get("api_key"),
+        )
+
+        webhook_cfg = raw.get("webhook", {})
+        webhook = WebhookConfig(
+            enabled=bool(webhook_cfg.get("enabled", False)),
+            host=str(webhook_cfg.get("host", "0.0.0.0")),
+            port=int(webhook_cfg.get("port", 8081)),
+            admin_token=str(webhook_cfg.get("admin_token", "")),
+        )
+
         return Settings(
             market_hedge_mode=market,
+            double_limit_enabled=bool(raw.get("double_limit_enabled", False)),
             exchanges=exchanges,
+            fees=fees,
+            google_sheets=google_sheets,
+            webhook=webhook,
             dry_run=bool(raw.get("dry_run", True)),
             telegram=telegram,
             database=database,
             rate_limits=rate_limits,
             market_pairs=pairs,
             connectivity=connectivity,
+            scheduler_policy=str(raw.get("scheduler", {}).get("policy", "round_robin")).lower(),
         )
 
