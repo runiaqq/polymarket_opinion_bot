@@ -14,8 +14,10 @@
     {
       "account_id": "poly_acc",
       "exchange": "Polymarket",
-      "api_key": "POLYMARKET_API_KEY",
-      "secret_key": "POLYMARKET_SECRET",
+      "api_key": "6cc0b489-d496-c3dd-5cf3-4211998e7c72",
+      "secret_key": "s7SbNsC5WLSIUovMrNmQxc43QcgD8PTEiVGcMv_pgDo=",
+      "passphrase": "6efa80b1f744a7468027c62d9b29b918d35ffe6eb91bedd23dceb5bfe279af7c",
+      "wallet_address": "0xd05ff050Cd8Fc040E2e74c6321728725e2cBF551",
       "proxy": "http://user:pass@host:port",
       "metadata": {},
       "weight": 1.0,

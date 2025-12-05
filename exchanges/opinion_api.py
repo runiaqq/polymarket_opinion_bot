@@ -204,9 +204,15 @@ class OpinionAPI(BaseExchangeClient):
             created_at=created_dt,
         )
 
-    def _auth_headers(self, payload: Dict[str, Any] | None = None) -> Dict[str, str]:
+    def _auth_headers(
+        self,
+        method: str,
+        path: str,
+        payload: Dict[str, Any] | None = None,
+        serialized_body: str | None = None,
+    ) -> Dict[str, str]:
         timestamp = str(int(time.time() * 1000))
-        body = json.dumps(payload or {}, separators=(",", ":"), sort_keys=True)
+        body = serialized_body or json.dumps(payload or {}, separators=(",", ":"), sort_keys=True)
         signature = hmac.new(
             self.secret.encode(),
             f"{timestamp}{body}".encode(),

@@ -142,6 +142,8 @@ class ConfigLoader:
                     exchange=exchange,
                     api_key=entry["api_key"],
                     secret_key=entry.get("secret_key", ""),
+                    passphrase=entry.get("passphrase"),
+                    wallet_address=entry.get("wallet_address"),
                     proxy=entry.get("proxy"),
                     metadata=entry.get("metadata", {}),
                     weight=float(entry.get("weight", 1.0)),

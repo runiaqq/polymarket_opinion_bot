@@ -16,6 +16,8 @@ async def test_polymarket_limit_order_payload(monkeypatch):
         session=session,
         api_key="key",
         secret="secret",
+        passphrase="pass",
+        wallet_address="0xabc",
         rate_limit=limiter,
         logger=BotLogger("poly-test"),
     )
@@ -143,6 +145,8 @@ async def test_clients_cancel_with_client_ids(monkeypatch):
         session=session,
         api_key="key",
         secret="secret",
+        passphrase="pass",
+        wallet_address="0xabc",
         rate_limit=limiter,
         logger=BotLogger("poly-cancel"),
     )

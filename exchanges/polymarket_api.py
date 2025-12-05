@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -8,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import aiohttp
+from eth_utils import to_checksum_address
 
 from core.models import (
     ExchangeName,
@@ -33,6 +35,8 @@ class PolymarketAPI(BaseExchangeClient):
         session: aiohttp.ClientSession,
         api_key: str,
         secret: str,
+        passphrase: str | None,
+        wallet_address: str | None,
         rate_limit: RateLimiter,
         logger: BotLogger | None = None,
         proxy: str | None = None,
@@ -40,16 +44,27 @@ class PolymarketAPI(BaseExchangeClient):
         data_url: str = "https://gamma-api.polymarket.com",
     ):
         super().__init__(rest_url, session, api_key, secret, rate_limit, logger, proxy)
+        if not passphrase:
+            raise ValueError("Polymarket passphrase is required")
+        if not wallet_address:
+            raise ValueError("Polymarket wallet_address is required")
+        self.passphrase = passphrase
+        try:
+            self.wallet_address = to_checksum_address(wallet_address)
+        except ValueError as exc:
+            raise ValueError("Invalid Polymarket wallet address") from exc
         self.data_url = data_url.rstrip("/")
         self.orderbooks = OrderbookManager()
 
     async def fetch_markets(self) -> List[Market]:
         data = await self._request_data("GET", "/markets")
-        return [self._parse_market(entry) for entry in data.get("markets", [])]
+        records = data.get("markets", data) if isinstance(data, dict) else data
+        return [self._parse_market(entry) for entry in records]
 
     async def fetch_market(self, market_id: str) -> Market:
         data = await self._request_data("GET", f"/markets/{market_id}")
-        return self._parse_market(data)
+        payload = data.get("market", data) if isinstance(data, dict) else data
+        return self._parse_market(payload)
 
     async def get_orderbook(self, market_id: str) -> OrderBook:
         data = await self._request_data("GET", f"/markets/{market_id}/orderbook")
@@ -115,12 +130,23 @@ class PolymarketAPI(BaseExchangeClient):
         return data.get("trades", [])
 
     async def get_balances(self) -> Dict[str, float]:
-        data = await self._request("GET", "/balances")
-        return data.get("balances", {})
+        data = await self._request(
+            "GET",
+            "/balance-allowance",
+            params={"asset_type": "COLLATERAL"},
+        )
+        balance = float(data.get("balance", 0.0))
+        allowance = float(data.get("allowance", 0.0))
+        return {
+            "USDC": balance,
+            "USDC_allowance": allowance,
+        }
 
     async def get_positions(self) -> List[Dict[str, Any]]:
-        data = await self._request("GET", "/positions")
-        return data.get("positions", [])
+        data = await self._request_data("GET", "/positions")
+        if isinstance(data, dict):
+            return data.get("positions", [])
+        return data
 
     async def fetch_fills(self, since: Optional[float] = None) -> List[Fill]:
         params = {"since": since} if since else None
@@ -216,17 +242,35 @@ class PolymarketAPI(BaseExchangeClient):
                 raise RuntimeError(f"polymarket data error {response.status}")
             return await response.json()
 
-    def _auth_headers(self, payload: Dict[str, Any] | None = None) -> Dict[str, str]:
-        timestamp = str(int(time.time() * 1000))
-        body = json.dumps(payload or {}, separators=(",", ":"), sort_keys=True)
-        signature = hmac.new(
-            self.secret.encode(),
-            f"{timestamp}{body}".encode(),
-            hashlib.sha256,
-        ).hexdigest()
+    def _auth_headers(
+        self,
+        method: str,
+        path: str,
+        payload: Dict[str, Any] | None = None,
+        serialized_body: str | None = None,
+    ) -> Dict[str, str]:
+        timestamp = str(int(time.time()))
+        request_path = path if path.startswith("/") else f"/{path}"
+        message = f"{timestamp}{method.upper()}{request_path}"
+        body_for_sig: str | Dict[str, Any] | None = serialized_body or payload
+        if body_for_sig:
+            if isinstance(body_for_sig, str):
+                body_repr = body_for_sig
+            else:
+                body_repr = str(body_for_sig)
+            message += body_repr.replace("'", '"')
+        try:
+            decoded_secret = base64.urlsafe_b64decode(self.secret)
+        except Exception as exc:  # pragma: no cover - defensive conversion
+            raise ValueError("Invalid Polymarket API secret; expected base64 string") from exc
+        signature = base64.urlsafe_b64encode(
+            hmac.new(decoded_secret, message.encode("utf-8"), hashlib.sha256).digest()
+        ).decode("utf-8")
         return {
-            "X-API-KEY": self.api_key,
-            "X-API-TIMESTAMP": timestamp,
-            "X-API-SIGNATURE": signature,
+            "POLY_ADDRESS": self.wallet_address,
+            "POLY_SIGNATURE": signature,
+            "POLY_TIMESTAMP": timestamp,
+            "POLY_API_KEY": self.api_key,
+            "POLY_PASSPHRASE": self.passphrase,
         }
 

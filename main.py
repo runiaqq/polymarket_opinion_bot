@@ -48,6 +48,8 @@ async def build_client(
             session=session,
             api_key=account.api_key,
             secret=account.secret_key,
+            passphrase=account.passphrase or account.metadata.get("passphrase"),
+            wallet_address=account.wallet_address or account.metadata.get("wallet_address"),
             rate_limit=limiter,
             logger=logger,
             proxy=account.proxy,

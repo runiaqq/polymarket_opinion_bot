@@ -114,11 +114,10 @@ class AccountCredentials:
     exchange: ExchangeName
     api_key: str
     secret_key: str
+    passphrase: Optional[str] = None
+    wallet_address: Optional[str] = None
     proxy: Optional[str] = None
     metadata: Dict[str, str] = field(default_factory=dict)
-    weight: float = 1.0
-    tokens_per_sec: float = 5.0
-    burst: int = 10
     weight: float = 1.0
     tokens_per_sec: float = 5.0
     burst: int = 10

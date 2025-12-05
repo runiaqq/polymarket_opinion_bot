@@ -5,6 +5,7 @@ import json
 import random
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
+from urllib.parse import urlencode
 
 import aiohttp
 
@@ -49,13 +50,28 @@ class BaseExchangeClient(ABC):
         while True:
             attempt += 1
             await self.rate_limit.acquire()
-            req_headers = self._build_headers(payload, headers, auth)
+            serialized_payload: Optional[str] = None
+            if payload is not None:
+                serialized_payload = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+            signed_path = path
+            if params:
+                query = urlencode(params, doseq=True)
+                signed_path = f"{path}?{query}"
+            req_headers = self._build_headers(
+                method,
+                signed_path,
+                payload,
+                serialized_payload,
+                headers,
+                auth,
+            )
+            data_bytes = serialized_payload.encode("utf-8") if serialized_payload is not None else None
             try:
                 async with self.session.request(
                     method,
                     url,
                     params=params,
-                    json=payload,
+                    data=data_bytes,
                     headers=req_headers,
                     proxy=self.proxy,
                     timeout=aiohttp.ClientTimeout(total=30),
@@ -94,7 +110,10 @@ class BaseExchangeClient(ABC):
 
     def _build_headers(
         self,
+        method: str,
+        path: str,
         payload: Optional[Dict[str, Any]],
+        serialized_body: Optional[str],
         headers: Optional[Dict[str, str]],
         auth: bool,
     ) -> Dict[str, str]:
@@ -102,10 +121,16 @@ class BaseExchangeClient(ABC):
         if headers:
             combined.update(headers)
         if auth:
-            combined.update(self._auth_headers(payload))
+            combined.update(self._auth_headers(method, path, payload, serialized_body))
         return combined
 
     @abstractmethod
-    def _auth_headers(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    def _auth_headers(
+        self,
+        method: str,
+        path: str,
+        payload: Optional[Dict[str, Any]] = None,
+        serialized_body: Optional[str] = None,
+    ) -> Dict[str, str]:
         """Return headers required for authenticated endpoints."""
 

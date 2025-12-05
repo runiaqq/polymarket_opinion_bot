@@ -4,9 +4,26 @@ import asyncio
 from typing import Dict, Optional
 
 import aiohttp
+from yarl import URL
 
 from core.models import AccountCredentials
 from utils.logger import BotLogger
+
+
+def sanitize_proxy(proxy: Optional[str], logger: BotLogger | None = None) -> Optional[str]:
+    """Return a proxy string if it parses cleanly, otherwise None."""
+    if not proxy:
+        return None
+    candidate = proxy.strip()
+    if not candidate:
+        return None
+    try:
+        URL(candidate)
+        return candidate
+    except ValueError:
+        if logger:
+            logger.warn("invalid proxy string; ignoring", proxy=candidate)
+        return None
 
 
 class ProxyHandler:
@@ -31,12 +48,14 @@ class ProxyHandler:
                 connector=connector,
                 trust_env=False,
             )
+            proxy_value = sanitize_proxy(account.proxy, self.logger)
+            account.proxy = proxy_value
             self._sessions[account.account_id] = session
-            self._proxies[account.account_id] = account.proxy
+            self._proxies[account.account_id] = proxy_value
             self.logger.debug(
                 "created session",
                 account_id=account.account_id,
-                proxy=account.proxy or "none",
+                proxy=proxy_value or "none",
             )
             return session
 
