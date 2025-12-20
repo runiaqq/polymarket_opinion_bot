@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from core.models import ExchangeName, OrderBook, OrderSide
+from core.models import ExchangeName, OrderBook, OrderSide, StrategyDirection
 from exchanges.orderbook_manager import OrderbookManager
 
 
@@ -52,6 +52,7 @@ class SpreadAnalyzer:
         primary_fees: Any,
         secondary_fees: Any,
         size: float,
+        forced_direction: Optional[StrategyDirection] = None,
     ) -> Optional[Dict[str, Any]]:
         best_primary_ask = await self.orderbooks.best_ask(primary_book)
         best_primary_bid = await self.orderbooks.best_bid(primary_book)
@@ -114,6 +115,8 @@ class SpreadAnalyzer:
                 }
             )
 
+        if forced_direction:
+            scenarios = [s for s in scenarios if _matches_direction(s["direction"], forced_direction)]
         if not scenarios:
             return None
         return max(scenarios, key=lambda entry: entry["net_total"])
@@ -124,4 +127,14 @@ class SpreadAnalyzer:
         if isinstance(fees, dict):
             return float(fees.get(attr, 0.0))
         return float(getattr(fees, attr, 0.0))
+
+
+def _matches_direction(direction: str, forced: "StrategyDirection") -> bool:
+    if forced == StrategyDirection.AUTO:
+        return True
+    if forced == StrategyDirection.A_TO_B:
+        return direction == "primary_buy_secondary_sell"
+    if forced == StrategyDirection.B_TO_A:
+        return direction == "secondary_buy_primary_sell"
+    return True
 

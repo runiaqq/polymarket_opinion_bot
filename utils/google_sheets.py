@@ -2,13 +2,23 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 import aiohttp
 
-from core.models import ExchangeName
+from core.models import ContractType, ExchangeName, StrategyDirection
 from utils.config_loader import GoogleSheetsConfig, MarketPairConfig
 from utils.logger import BotLogger
+
+
+@dataclass(slots=True)
+class SheetPairSpec:
+    """Representation of a Sheet-sourced market pair."""
+
+    pair_cfg: MarketPairConfig
+    size_limit: float | None
+    fingerprint: str
 
 
 class MarketPairStore:
@@ -39,6 +49,31 @@ class MarketPairStore:
             removed = len(old_keys - new_keys)
             self._pairs = new_map
         return {"added": added, "removed": removed, "total": len(new_map)}
+
+
+class GoogleSheetsClient:
+    """
+    Lightweight client that fetches raw rows and parses them into SheetPairSpec
+    structures consumable by PairController and scripts.
+    """
+
+    def __init__(
+        self,
+        config: GoogleSheetsConfig,
+        logger: BotLogger | None = None,
+        session: aiohttp.ClientSession | None = None,
+    ):
+        self.sync = GoogleSheetsSync(config, logger=logger, session=session)
+
+    async def fetch_rows(self) -> List[List[str]]:
+        return await self.sync._fetch_rows()  # noqa: SLF001 - internal reuse is intentional
+
+    async def fetch_specs(self) -> Dict[str, SheetPairSpec]:
+        rows = await self.fetch_rows()
+        return parse_sheet_pairs(rows)
+
+    async def close(self) -> None:
+        await self.sync.close()
 
 
 class GoogleSheetsSync:
@@ -131,6 +166,56 @@ class GoogleSheetsSync:
         return pairs
 
 
+def parse_sheet_pairs(values: List[List[str]]) -> Dict[str, SheetPairSpec]:
+    """
+    Parse a two-column (Polymarket, Opinion) sheet into SheetPairSpec entries.
+    Accepts optional headers like `size_limit` to cap per-market exposure.
+    """
+    if not values:
+        return {}
+    headers = [_normalize_header(cell) for cell in values[0]]
+    specs: Dict[str, SheetPairSpec] = {}
+    for row_values in values[1:]:
+        row = {headers[idx]: row_values[idx] for idx in range(min(len(headers), len(row_values)))}
+        primary_market = row.get("polymarket") or row.get("primary_market_id") or row.get("marketa_url")
+        secondary_market = row.get("opinion") or row.get("secondary_market_id") or row.get("marketb_url")
+        if not primary_market or not secondary_market:
+            continue
+        event_id = row.get("event_id") or row.get("pair_id") or f"{primary_market}:{secondary_market}"
+        size_raw = row.get("size_limit") or row.get("max_position_size_per_market")
+        try:
+            size_limit = float(size_raw) if size_raw not in (None, "", "None") else None
+        except (TypeError, ValueError):
+            size_limit = None
+        contract_raw = str(row.get("contract_type", ContractType.BINARY.value)).upper()
+        strategy_dir_raw = str(row.get("strategy_direction", StrategyDirection.AUTO.value)).upper()
+        try:
+            contract_type = ContractType(contract_raw)
+        except ValueError:
+            contract_type = ContractType.BINARY
+        try:
+            strategy_direction = StrategyDirection(strategy_dir_raw)
+        except ValueError:
+            strategy_direction = StrategyDirection.AUTO
+        pair_cfg = MarketPairConfig(
+            event_id=event_id,
+            primary_market_id=primary_market,
+            secondary_market_id=secondary_market,
+            primary_account_id=row.get("primary_account_id"),
+            secondary_account_id=row.get("secondary_account_id"),
+            pair_id=row.get("pair_id") or event_id,
+            strategy=row.get("strategy"),
+            max_position_size_per_market=size_limit,
+            primary_exchange=ExchangeName.POLYMARKET,
+            secondary_exchange=ExchangeName.OPINION,
+            contract_type=contract_type,
+            strategy_direction=strategy_direction,
+        )
+        fingerprint = _fingerprint(pair_cfg, size_limit)
+        specs[event_id] = SheetPairSpec(pair_cfg=pair_cfg, size_limit=size_limit, fingerprint=fingerprint)
+    return specs
+
+
 def _row_to_pair(row: Dict[str, str]) -> Optional[MarketPairConfig]:
     primary_market = row.get("primary_market_id") or row.get("marketa_url")
     secondary_market = row.get("secondary_market_id") or row.get("marketb_url")
@@ -166,4 +251,17 @@ def _parse_exchange(value: Optional[str]) -> Optional[ExchangeName]:
 
 def _normalize_header(header: str) -> str:
     return header.strip().lower().replace(" ", "_")
+
+
+def _fingerprint(pair_cfg: MarketPairConfig, size_override: Optional[float]) -> str:
+    payload = {
+        "primary": pair_cfg.primary_market_id,
+        "secondary": pair_cfg.secondary_market_id,
+        "primary_exchange": pair_cfg.primary_exchange.value if pair_cfg.primary_exchange else "",
+        "secondary_exchange": pair_cfg.secondary_exchange.value if pair_cfg.secondary_exchange else "",
+        "size": size_override,
+        "contract_type": pair_cfg.contract_type.value if pair_cfg.contract_type else "",
+        "strategy_direction": pair_cfg.strategy_direction.value if pair_cfg.strategy_direction else "",
+    }
+    return json.dumps(payload, sort_keys=True)
 

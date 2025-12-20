@@ -20,12 +20,12 @@ dry_run: true
 
 database:
   backend: "sqlite"
-  dsn: "sqlite+aiosqlite:///./data/market_hedge.db"
+  dsn: "sqlite+aiosqlite:///C:/trade_bot/data/market_hedge.db"
 
 telegram:
-  enabled: false
-  token: ""
-  chat_id: ""
+  enabled: true
+  token: "8584243663:AAG2_c6TJGiujPrTLcZ_ak7YlgAE58wbnwY"
+  chat_id: "504677064"
 
 rate_limits:
   Opinion:
@@ -62,9 +62,39 @@ webhook:
   admin_token: ""
 
 market_pairs:
-  - event_id: "event-001"
-    primary_market_id: "opinion_token_yes"
-    secondary_market_id: "polymarket_market_id"
+  - event_id: "xrp-flip-eth-2025"
+    primary_market_id: "7"         # Opinion: Will XRP flip ETH in 2025?
+    secondary_market_id: "28479181409628503087605312563269512200670414294184478906642949841544762042605"  # Polymarket CLOB token
     primary_account_id: "opinion_acc"
     secondary_account_id: "poly_acc"
+    contract_type: "BINARY"
+    strategy_direction: "AUTO"
+  # - event_id: "fed-rate-cuts-2025"
+  #   primary_market_id: "1"          # Opinion: How many Fed rate cuts in 2025?
+  #   secondary_market_id: "86651051340048717188016545368005905974650771288612142430184256026061526806964"  # Polymarket CLOB token (orderbook 200)
+  #   primary_account_id: "opinion_acc"
+  #   secondary_account_id: "poly_acc"
+  #   contract_type: "BINARY"
+  #   strategy_direction: "AUTO"
+  # - event_id: "ethereum-price-2025"
+  #   primary_market_id: "10"         # Opinion: What price will Ethereum hit in 2025?
+  #   secondary_market_id: "29343668727576345947682437806650755062942699279412515812544670828683916920165"  # Polymarket CLOB token
+  #   primary_account_id: "opinion_acc"
+  #   secondary_account_id: "poly_acc"
+  #   contract_type: "BINARY"
+  #   strategy_direction: "AUTO"
+  # - event_id: "btc-above-100k-2025"
+  #   primary_market_id: "18"         # Opinion: Will BTC still above 100k by Nov
+  #   secondary_market_id: "38847009816712843994450984687326353538568408165699069914494434987036764268122"  # Polymarket CLOB token
+  #   primary_account_id: "opinion_acc"
+  #   secondary_account_id: "poly_acc"
+  #   contract_type: "BINARY"
+  #   strategy_direction: "AUTO"
+  # - event_id: "largest-company-2025"
+  #   primary_market_id: "65"         # Opinion: Which company largest by market cap end of 2025?
+  #   secondary_market_id: "15271019043010639723298843791830630480883735993015509205884038465737030715244"  # Polymarket CLOB token
+  #   primary_account_id: "opinion_acc"
+  #   secondary_account_id: "poly_acc"
+  #   contract_type: "BINARY"
+  #   strategy_direction: "AUTO"
 

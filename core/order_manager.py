@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from contextlib import suppress
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Dict, Optional, Tuple
@@ -46,6 +47,7 @@ class OrderManager:
         market_map: Dict[ExchangeName, str] | None = None,
         mapper: Optional[MarketMapper] = None,
         double_limit_enabled: bool = False,
+        cancel_after_ms: Optional[int] = None,
     ):
         self.exchanges = exchanges
         self.db = database
@@ -70,6 +72,8 @@ class OrderManager:
         self._order_exchanges: Dict[str, ExchangeName] = {}
         self.log_hooks = LogHooks()
         self._double_limit_locks: Dict[str, asyncio.Lock] = {}
+        self._cancel_tasks: Dict[str, asyncio.Task] = {}
+        self._cancel_after_ms = cancel_after_ms
         self.cancel_retry_attempts = CANCEL_RETRY_ATTEMPTS
         self._cancel_backoff_base = CANCEL_BACKOFF_BASE
         self._cancel_failure_count = 0
@@ -90,7 +94,7 @@ class OrderManager:
     ) -> Order | None:
         exchange = self.exchanges[exchange_name]
         async with self._locks[exchange_name]:
-            await self.risk_manager.check_limits(market_id, size)
+            await self.risk_manager.check_limits(self.event_id or market_id, size)
             await self.risk_manager.check_balance(exchange, price * size)
             client_order_id = client_order_id or str(uuid.uuid4())
             if self.dry_run:
@@ -133,6 +137,7 @@ class OrderManager:
                 market_id=market_id,
                 exchange=exchange_name.value,
             )
+            await self._schedule_cancel(order_key, exchange_name)
             return order
 
     async def place_double_limit(
@@ -228,6 +233,7 @@ class OrderManager:
         exchange = self.exchanges[exchange_name]
         async with self._locks[exchange_name]:
             if self.dry_run:
+                await self._after_cancel(order_id)
                 return True
             fsm = self._fsms.get(order_id)
             if fsm:
@@ -243,6 +249,7 @@ class OrderManager:
                 )
             else:
                 await self.db.update_order_status(order_id, OrderStatus.CANCELED)
+            await self._after_cancel(order_id)
             self.logger.info(
                 "limit order cancelled",
                 exchange=exchange_name.value,
@@ -356,6 +363,8 @@ class OrderManager:
                     "legs": len(result or []),
                 }
             )
+            if hasattr(self.risk_manager, "decrement"):
+                await self.risk_manager.decrement(event_id, fill.size)
             await self.log_hooks.emit(
                 "hedge_requested",
                 {
@@ -375,6 +384,8 @@ class OrderManager:
                 }
             )
         await self._record_sequence_event(fill.order_id, "hedge", hedge_payload)
+        if is_full:
+            await self._clear_cancel_task(fill.order_id)
         return self._fill_key(fill)
 
     @staticmethod
@@ -517,6 +528,7 @@ class OrderManager:
             for result in results:
                 if isinstance(result, Exception):
                     self.logger.warn("cancel_all_open_orders encountered error", error=str(result))
+        await self._cancel_all_timers()
 
     async def _attempt_cancel(self, exchange_name: ExchangeName, order: Order | None) -> None:
         if not order:
@@ -683,16 +695,17 @@ class OrderManager:
                 "value": self._cancel_failure_count,
             },
         )
-        await self.db.record_incident(
-            "WARNING",
-            "cancel_failure",
-            {
-                "order_id": order_id,
-                "exchange": exchange_name.value,
-                "error": error or "unknown",
-                "attempts": self.cancel_retry_attempts,
-            },
-        )
+        if hasattr(self.db, "record_incident"):
+            await self.db.record_incident(
+                "WARNING",
+                "cancel_failure",
+                {
+                    "order_id": order_id,
+                    "exchange": exchange_name.value,
+                    "error": error or "unknown",
+                    "attempts": self.cancel_retry_attempts,
+                },
+            )
         if self._cancel_failure_count >= self._cancel_alert_threshold:
             await self._notify_cancel_threshold()
 
@@ -729,4 +742,63 @@ class OrderManager:
 
     def _fill_key(self, fill: Fill) -> str:
         return f"{fill.order_id}:{fill.timestamp.isoformat()}:{fill.size}"
+
+    async def _schedule_cancel(self, order_id: str, exchange: ExchangeName) -> None:
+        if not self._cancel_after_ms or self.dry_run:
+            return
+        # avoid duplicate timers
+        await self._clear_cancel_task(order_id)
+
+        async def _wait_and_cancel():
+            try:
+                await asyncio.sleep(self._cancel_after_ms / 1000)
+                fsm = self._fsms.get(order_id)
+                if fsm and fsm.current_state in {
+                    OrderFSMState.FILLED,
+                    OrderFSMState.CANCELLED,
+                    OrderFSMState.FAILED,
+                }:
+                    return
+                await self._record_sequence_event(
+                    order_id,
+                    "cancel_timeout",
+                    {"reason": "cancel_unfilled_after_ms", "ms": self._cancel_after_ms},
+                )
+                await self._send_alert(
+                    f"Auto-cancel triggered for order {order_id} after {self._cancel_after_ms}ms"
+                )
+                await self.cancel_limit(exchange, order_id)
+            except asyncio.CancelledError:
+                return
+
+        task = asyncio.create_task(_wait_and_cancel())
+        self._cancel_tasks[order_id] = task
+
+    async def _clear_cancel_task(self, order_id: str) -> None:
+        task = self._cancel_tasks.pop(order_id, None)
+        if task:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+    async def _cancel_all_timers(self) -> None:
+        tasks = list(self._cancel_tasks.values())
+        self._cancel_tasks.clear()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            with suppress(asyncio.CancelledError):
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _after_cancel(self, order_id: str) -> None:
+        await self._clear_cancel_task(order_id)
+        remaining = self._remaining_unfilled(order_id)
+        if remaining > 0 and self.event_id and hasattr(self.risk_manager, "decrement"):
+            await self.risk_manager.decrement(self.event_id, remaining)
+
+    def _remaining_unfilled(self, order_id: str) -> float:
+        size = self._order_sizes.get(order_id, 0.0)
+        filled = self._fill_progress.get(order_id, 0.0)
+        remaining = max(0.0, size - filled)
+        return remaining
 

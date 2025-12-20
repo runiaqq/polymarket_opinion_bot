@@ -1,0 +1,21 @@
+[
+  {
+    "id": "601697",
+    "slug": "fed-decreases-interest-rates-by-50-bps-after-january-2026-meeting",
+    "conditionId": "0x17815081230e3b9c78b098162c33b1ffa68c4ec29c123d3d14989599e0c2e113",
+    "question": "Fed decreases interest rates by 50+ bps after January 2026 meeting?",
+    "outcomes": ["Yes", "No"],
+    "clobTokenIds": [
+      "11862165566757345985240476164489718219056735011698825377388402888080786399275",
+      "71478852790279095447182996049071040792010759617668969799049179229104800573786"
+    ],
+    "active": true,
+    "closed": false,
+    "acceptingOrders": true,
+    "createdAt": "2025-09-17T16:22:35.837625Z",
+    "endDate": "2026-01-28T00:00:00Z"
+  }
+]
+
+
+

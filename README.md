@@ -40,6 +40,12 @@ Provide every trading account with its exchange, API keys, and proxy:
       "exchange": "Opinion",
       "api_key": "OPINION_API_KEY",
       "secret_key": "OPINION_SECRET",
+      "private_key": "0xOPINION_SIGNER_PRIVATE_KEY",
+      "multi_sig_address": "0xSafeOrWallet",
+      "rpc_url": "https://bsc-dataseed.binance.org",
+      "chain_id": 56,
+      "host": "https://proxy.opinion.trade:8443",
+      "ws_url": "wss://ws.opinion.trade/v1",
       "proxy": "http://user:pass@host:port"
     },
     {
@@ -52,6 +58,8 @@ Provide every trading account with its exchange, API keys, and proxy:
   ]
 }
 ```
+
+> ℹ️ **Secrets**: load `api_key`, `private_key`, and `multi_sig_address` from environment variables or a secret manager before writing the file, or template the JSON to read via `dotenv`. The Opinion SDK requires an API key **and** the signer private key + multi-sig portfolio address to build EIP712 signatures.
 
 ### `config/settings.yaml`
 

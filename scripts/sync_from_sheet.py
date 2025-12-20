@@ -18,8 +18,7 @@ async def run(once: bool) -> None:
     logger = BotLogger("sheet_sync")
     client = GoogleSheetsClient(settings.google_sheets, logger=logger)
     try:
-        rows = await client.fetch_rows()
-        specs = parse_sheet_pairs(rows)
+        specs = await client.fetch_specs()
         output = {
             "pair_count": len(specs),
             "pairs": [
@@ -50,4 +49,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
 

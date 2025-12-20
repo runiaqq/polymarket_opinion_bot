@@ -5,7 +5,6 @@ import json
 import random
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
-from urllib.parse import urlencode
 
 import aiohttp
 
@@ -53,13 +52,9 @@ class BaseExchangeClient(ABC):
             serialized_payload: Optional[str] = None
             if payload is not None:
                 serialized_payload = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
-            signed_path = path
-            if params:
-                query = urlencode(params, doseq=True)
-                signed_path = f"{path}?{query}"
             req_headers = self._build_headers(
                 method,
-                signed_path,
+                path,
                 payload,
                 serialized_payload,
                 headers,

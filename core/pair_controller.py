@@ -62,6 +62,7 @@ class PairController:
         self.clients_by_id = clients_by_id
         self._pairs: Dict[str, PairRuntime] = {}
         self._lock = asyncio.Lock()
+        self._account_rr: Dict[ExchangeName, int] = {}
 
     def list_order_managers(self) -> Iterable[OrderManager]:
         return (runtime.order_manager for runtime in self._pairs.values())
@@ -80,7 +81,11 @@ class PairController:
             if pair_id in self._pairs:
                 self.logger.warn("pair already running", pair_id=pair_id)
                 return
-            runtime = await self._spawn_pair(pair_cfg, size_override, source, fingerprint)
+            try:
+                runtime = await self._spawn_pair(pair_cfg, size_override, source, fingerprint)
+            except Exception as exc:
+                self.logger.error("failed to start pair", pair_id=pair_id, error=str(exc))
+                return
             self._pairs[pair_id] = runtime
 
     async def _spawn_pair(
@@ -100,6 +105,11 @@ class PairController:
             primary_exchange: primary_client,
             secondary_exchange: secondary_client,
         }
+
+        await self._assert_polymarket_orderbook(
+            primary_exchange, secondary_exchange, pair_cfg, primary_client, secondary_client
+        )
+
         order_manager = OrderManager(
             exchange_map,
             self.db,
@@ -115,6 +125,7 @@ class PairController:
             },
             mapper=self.mapper,
             double_limit_enabled=self.settings.double_limit_enabled,
+            cancel_after_ms=self.settings.market_hedge_mode.cancel_unfilled_after_ms,
         )
         order_manager.set_routing(primary_exchange, secondary_exchange)
         pair_stop_event = asyncio.Event()
@@ -158,7 +169,33 @@ class PairController:
                 exchange=exchange.value,
                 account_id=preferred_id,
             )
-        return pool[0]
+        # Round-robin selection to spread load across many accounts.
+        cursor = self._account_rr.get(exchange, 0)
+        account = pool[cursor % len(pool)]
+        self._account_rr[exchange] = (cursor + 1) % len(pool)
+        return account
+
+    async def _assert_polymarket_orderbook(
+        self,
+        primary_exchange: ExchangeName,
+        secondary_exchange: ExchangeName,
+        pair_cfg: MarketPairConfig,
+        primary_client,
+        secondary_client,
+    ) -> None:
+        """Validate Polymarket orderbook availability once before running a pair."""
+        targets = []
+        if primary_exchange == ExchangeName.POLYMARKET:
+            targets.append(("primary", pair_cfg.primary_market_id, primary_client))
+        if secondary_exchange == ExchangeName.POLYMARKET:
+            targets.append(("secondary", pair_cfg.secondary_market_id, secondary_client))
+        for side, market_id, client in targets:
+            try:
+                await client.get_orderbook(market_id)
+            except Exception as exc:
+                message = f"polymarket orderbook unavailable ({side})"
+                self.logger.error(message, market_id=market_id, pair=pair_cfg.event_id, error=str(exc))
+                raise RuntimeError(message)
 
     async def stop_pair(self, pair_id: str, reason: str | None = None) -> None:
         async with self._lock:
@@ -243,7 +280,12 @@ async def run_pair_loop(
     logger: BotLogger,
 ) -> None:
     min_spread = settings.market_hedge_mode.min_spread_for_entry
-    size_limit = size_override or settings.market_hedge_mode.max_position_size_per_market or 10.0
+    size_limit = (
+        size_override
+        or pair_cfg.max_position_size_per_market
+        or settings.market_hedge_mode.max_position_size_per_market
+        or 10.0
+    )
     size = max(0.01, size_limit)
     primary_exchange = pair_cfg.primary_exchange or settings.exchanges.primary
     secondary_exchange = pair_cfg.secondary_exchange or settings.exchanges.secondary
@@ -261,6 +303,7 @@ async def run_pair_loop(
             primary_fees=primary_fees,
             secondary_fees=secondary_fees,
             size=size,
+            forced_direction=pair_cfg.strategy_direction,
         )
         if not scenario:
             return

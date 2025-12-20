@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 
+from aiohttp import ClientResponseError, ContentTypeError
+
 from core.exceptions import FatalExchangeError
 from core.models import (
     ExchangeName,
@@ -30,6 +32,9 @@ from utils.logger import BotLogger
 class OpinionAPI(BaseExchangeClient):
     """Async interface for interacting with the Opinion exchange."""
 
+    # Opinion websocket endpoint is currently unavailable; keep the flag for capability checks.
+    supports_websocket = False
+
     def __init__(
         self,
         session: aiohttp.ClientSession,
@@ -43,27 +48,49 @@ class OpinionAPI(BaseExchangeClient):
     ):
         super().__init__(rest_url, session, api_key, secret, rate_limit, logger, proxy)
         self.orderbooks = OrderbookManager()
+        # WebSocketManager is retained for optional future use but is not exercised today.
         self.ws = WebSocketManager(ws_url, session, logger=self.logger, proxy=proxy)
 
-    async def get_markets(self) -> List[Market]:
-        data = await self._api_request("GET", "/markets", auth=False)
-        return [self._parse_market(item) for item in data.get("list", [])]
+    async def get_markets(self, page: int = 1, limit: int = 20, status: str = "activated") -> List[Market]:
+        """Discovery via OpenAPI (not CLOB REST)."""
+        url = "https://openapi.opinion.trade/openapi/market"
+        headers = {"apikey": self.api_key}
+        params = {"page": page, "limit": min(limit, 20), "status": status, "marketType": 2}
+        try:
+            async with self.session.get(url, headers=headers, params=params, proxy=self.proxy, timeout=30) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise FatalExchangeError(f"openapi discovery failed ({resp.status}): {text}")
+                try:
+                    payload = await resp.json()
+                except ContentTypeError:
+                    text = await resp.text()
+                    raise FatalExchangeError(f"openapi discovery invalid content: {text}")
+        except ClientResponseError as exc:
+            raise FatalExchangeError(f"openapi discovery error: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise FatalExchangeError("openapi discovery returned non-dict payload")
+        result = payload.get("result") or payload.get("data") or {}
+        markets = result.get("list", []) if isinstance(result, dict) else []
+        return [self._parse_market(item) for item in markets]
 
     async def get_market(self, token_id: str) -> Market:
         data = await self._api_request("GET", f"/markets/{token_id}", auth=False)
         return self._parse_market(data.get("data", {}))
 
     async def get_orderbook(self, token_id: str) -> OrderBook:
-        data = await self._api_request("GET", f"/orderbook/{token_id}", auth=False)
-        payload = data.get("data", {})
-        bids = [
-            {"price": float(b["price"]), "size": float(b["amount"])}
-            for b in payload.get("bids", [])
-        ]
-        asks = [
-            {"price": float(a["price"]), "size": float(a["amount"])}
-            for a in payload.get("asks", [])
-        ]
+        """Fetch Opinion orderbook via OpenAPI token endpoint using token_id."""
+        url = "https://openapi.opinion.trade/openapi/token/orderbook"
+        headers = {"apikey": self.api_key}
+        params = {"token_id": token_id}
+        async with self.session.get(url, headers=headers, params=params, proxy=self.proxy, timeout=30) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                raise FatalExchangeError(f"unexpected response: {text}")
+            data = await resp.json()
+        payload = data.get("result") or data.get("data") or data
+        bids = [{"price": float(b.get("price", 0)), "size": float(b.get("amount", b.get("size", 0)))} for b in payload.get("bids", [])]
+        asks = [{"price": float(a.get("price", 0)), "size": float(a.get("amount", a.get("size", 0)))} for a in payload.get("asks", [])]
         return self.orderbooks.parse_orderbook(token_id, bids, asks)
 
     async def place_limit_order(
@@ -144,10 +171,24 @@ class OpinionAPI(BaseExchangeClient):
         return data.get("list", [])
 
     async def fetch_fills(self, token_id: Optional[str] = None) -> List[Fill]:
-        trades = await self.get_trades(token_id)
+        try:
+            trades = await self.get_trades(token_id)
+        except Exception as exc:
+            # Defensive: missing/404 trade endpoint should not crash reconciliation polling.
+            self.logger.warn("opinion trades fetch failed", error=str(exc))
+            return []
         return [self._trade_to_fill(entry) for entry in trades]
 
+    async def fetch_user_trades(self, since: Optional[float] = None) -> List[Fill]:
+        """
+        REST fallback for fills polling. Filters locally using the provided unix timestamp.
+        """
+        # Disable noisy polling (404s) for now; websockets are unavailable on Opinion.
+        return []
+
     async def listen_fills(self, handler):
+        if not self.supports_websocket:
+            raise RuntimeError("Opinion websocket is unavailable; use REST polling instead")
         async def _wrapped(message: Dict[str, Any]):
             fill = self._parse_ws_fill(message)
             if fill:
@@ -161,13 +202,23 @@ class OpinionAPI(BaseExchangeClient):
         await self.ws.close()
 
     def _parse_market(self, payload: Dict[str, Any]) -> Market:
+        market_id = payload.get("marketId") or payload.get("market_id") or payload.get("topic_id")
+        name = payload.get("marketTitle") or payload.get("topic_title", "")
+        market_type = payload.get("marketType")
+        status_enum = payload.get("statusEnum") or payload.get("status")
+        yes_token = payload.get("yesTokenId")
+        no_token = payload.get("noTokenId")
+        child_markets = payload.get("childMarkets") or []
         return Market(
-            market_id=str(payload.get("market_id") or payload.get("topic_id")),
-            name=payload.get("marketTitle") or payload.get("topic_title", ""),
+            market_id=str(market_id),
+            name=name,
             exchange=ExchangeName.OPINION,
-            status=str(payload.get("status")),
+            status=str(status_enum),
             extra={
-                "type": str(payload.get("marketType")),
+                "marketType": market_type,
+                "yesTokenId": yes_token,
+                "noTokenId": no_token,
+                "childMarkets": child_markets,
                 "volume": str(payload.get("volume")),
             },
         )

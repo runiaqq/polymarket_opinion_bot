@@ -1,6 +1,6 @@
 import pytest
 
-from core.models import ExchangeName, OrderBook, OrderBookEntry
+from core.models import ExchangeName, OrderBook, OrderBookEntry, StrategyDirection
 from core.spread_analyzer import SpreadAnalyzer
 
 
@@ -85,4 +85,31 @@ async def test_evaluate_opportunity_returns_none_when_spread_negative():
         size=10,
     )
     assert scenario["net_total"] < 0
+
+
+@pytest.mark.asyncio
+async def test_forced_direction_respected():
+    analyzer = SpreadAnalyzer()
+    primary = OrderBook(
+        market_id="primary",
+        bids=[OrderBookEntry(price=0.51, size=50)],
+        asks=[OrderBookEntry(price=0.49, size=50)],
+    )
+    secondary = OrderBook(
+        market_id="secondary",
+        bids=[OrderBookEntry(price=0.55, size=50)],
+        asks=[OrderBookEntry(price=0.53, size=50)],
+    )
+    scenario = await analyzer.evaluate_opportunity(
+        primary_exchange=ExchangeName.OPINION,
+        secondary_exchange=ExchangeName.POLYMARKET,
+        primary_book=primary,
+        secondary_book=secondary,
+        primary_fees={"maker": 0.001},
+        secondary_fees={"maker": 0.002},
+        size=10,
+        forced_direction=StrategyDirection.A_TO_B,
+    )
+    assert scenario
+    assert scenario["direction"] == "primary_buy_secondary_sell"
 

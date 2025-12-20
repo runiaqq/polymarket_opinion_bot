@@ -7,7 +7,7 @@ from typing import Dict, List, Optional
 
 import yaml
 
-from core.models import AccountCredentials, ExchangeName
+from core.models import AccountCredentials, ContractType, ExchangeName, StrategyDirection
 
 
 @dataclass(slots=True)
@@ -95,6 +95,8 @@ class MarketPairConfig:
     max_position_size_per_market: float | None = None
     primary_exchange: ExchangeName | None = None
     secondary_exchange: ExchangeName | None = None
+    contract_type: ContractType = ContractType.BINARY
+    strategy_direction: StrategyDirection = StrategyDirection.AUTO
 
 
 @dataclass(slots=True)
@@ -233,6 +235,16 @@ class ConfigLoader:
                     secondary_account_id=item.get("secondary_account_id"),
                     primary_exchange=primary_exchange_enum,
                     secondary_exchange=secondary_exchange_enum,
+                    contract_type=ContractType(
+                        str(item.get("contract_type", ContractType.BINARY.value)).upper()
+                    )
+                    if item.get("contract_type")
+                    else ContractType.BINARY,
+                    strategy_direction=StrategyDirection(
+                        str(item.get("strategy_direction", StrategyDirection.AUTO.value)).upper()
+                    )
+                    if item.get("strategy_direction")
+                    else StrategyDirection.AUTO,
                 )
             )
 
@@ -279,7 +291,7 @@ class ConfigLoader:
 
         return Settings(
             market_hedge_mode=market,
-            double_limit_enabled=bool(raw.get("double_limit_enabled", False)),
+            double_limit_enabled=bool(raw.get("double_limit_enabled", True)),
             exchanges=exchanges,
             fees=fees,
             google_sheets=google_sheets,

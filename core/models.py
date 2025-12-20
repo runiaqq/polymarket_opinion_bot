@@ -30,6 +30,17 @@ class ExchangeName(str, Enum):
     OPINION = "Opinion"
 
 
+class ContractType(str, Enum):
+    BINARY = "BINARY"
+    MULTI = "MULTI"
+
+
+class StrategyDirection(str, Enum):
+    AUTO = "AUTO"
+    A_TO_B = "A_TO_B"  # buy primary, sell secondary
+    B_TO_A = "B_TO_A"  # buy secondary, sell primary
+
+
 class DoubleLimitState(str, Enum):
     ACTIVE = "ACTIVE"
     TRIGGERED = "TRIGGERED"

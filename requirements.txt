@@ -7,4 +7,6 @@ asyncpg
 pytest
 pytest-asyncio
 aioresponses
+opinion_clob_sdk==0.4.3
+eth-utils>=2.1.0
 

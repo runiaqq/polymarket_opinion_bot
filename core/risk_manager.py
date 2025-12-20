@@ -38,3 +38,11 @@ class RiskManager:
         if slippage > max_slippage:
             raise RiskCheckError("slippage exceeds threshold")
 
+    async def decrement(self, event_id: str, size: float) -> None:
+        if size <= 0:
+            return
+        current = self._event_limits.get(event_id, 0.0)
+        new_value = max(0.0, current - size)
+        self._event_limits[event_id] = new_value
+        self.logger.debug("exposure decremented", event_id=event_id, size=size, remaining=new_value)
+

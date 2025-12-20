@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from aiohttp import web
 from core.hedger import Hedger
 from core.market_mapper import MarketMapper
-from core.models import AccountCredentials, ExchangeName, OrderSide
-from core.order_manager import OrderManager
+from core.models import AccountCredentials, ExchangeName
+from core.pair_controller import PairController
 from core.position_tracker import PositionTracker
 from core.risk_manager import RiskManager
 from core.spread_analyzer import SpreadAnalyzer
@@ -17,18 +17,16 @@ from exchanges.orderbook_manager import OrderbookManager
 from exchanges.polymarket_api import PolymarketAPI
 from exchanges.rate_limiter import RateLimiter
 from exchanges.reconciliation import Reconciler
-from exchanges.reconciliation import Reconciler
 from telegram.notifier import TelegramNotifier
 from utils.config_loader import (
     ConfigLoader,
     ExchangeConnectivity,
-    MarketPairConfig,
     RateLimitConfig,
     Settings,
 )
 from utils.db import Database
 from utils.db_migrations import apply_migrations
-from utils.google_sheets import GoogleSheetsSync, MarketPairStore
+from utils.google_sheets import GoogleSheetsClient, GoogleSheetsSync, MarketPairStore
 from utils.logger import BotLogger
 from utils.proxy_handler import ProxyHandler
 
@@ -64,50 +62,6 @@ async def build_client(
     )
 
 
-async def run_pair(
-    pair_id: str,
-    pair_cfg: MarketPairConfig,
-    settings: Settings,
-    primary_client,
-    secondary_client,
-    order_manager: OrderManager,
-    spread_analyzer: SpreadAnalyzer,
-    orderbook_manager: OrderbookManager,
-    stop_event: asyncio.Event,
-    logger: BotLogger,
-):
-    min_spread = settings.market_hedge_mode.min_spread_for_entry
-    fees = 0.001
-    max_size = settings.market_hedge_mode.max_position_size_per_market or 10.0
-    size = max(0.01, min(10.0, max_size))
-
-    async def evaluate_once():
-        primary_book = await primary_client.get_orderbook(pair_cfg.primary_market_id)
-        secondary_book = await secondary_client.get_orderbook(pair_cfg.secondary_market_id)
-        spread = await spread_analyzer.compute_spread(primary_book, secondary_book)
-        profitable = await spread_analyzer.is_profitable(spread, fees, min_spread)
-        if not profitable:
-            return
-        best_ask = await orderbook_manager.best_ask(primary_book)
-        if not best_ask:
-            return
-        await order_manager.place_primary_limit(
-            settings.exchanges.primary,
-            pair_cfg.primary_market_id,
-            OrderSide.BUY,
-            best_ask.price,
-            size,
-        )
-
-    while not stop_event.is_set():
-        try:
-            await evaluate_once()
-        except Exception as exc:  # pragma: no cover - defensive logging
-            logger.error("pair loop error", pair=pair_id, error=str(exc))
-            await asyncio.sleep(5)
-        await asyncio.sleep(1)
-
-
 async def main() -> None:
     loader = ConfigLoader()
     settings = loader.load_settings()
@@ -115,7 +69,7 @@ async def main() -> None:
 
     logger = BotLogger("market_hedge")
     pair_store = MarketPairStore(settings.market_pairs)
-    sheet_sync = GoogleSheetsSync(settings.google_sheets, logger) if settings.google_sheets.enabled else None
+    sheet_sync_for_web = GoogleSheetsSync(settings.google_sheets, logger) if settings.google_sheets.enabled else None
     await apply_migrations(settings.database)
     db = Database(settings.database, logger=logger)
     await db.init()
@@ -125,6 +79,10 @@ async def main() -> None:
         chat_id=settings.telegram.chat_id,
         enabled=settings.telegram.enabled,
     )
+
+    if not settings.market_hedge_mode.enabled:
+        logger.warn("market hedge mode disabled in settings.yaml; exiting")
+        return
 
     risk_manager = RiskManager(settings.market_hedge_mode, logger)
     orderbook_manager = OrderbookManager()
@@ -141,7 +99,8 @@ async def main() -> None:
     )
     mapper = MarketMapper()
 
-    clients: Dict[str, object] = {}
+    clients_by_id: Dict[str, object] = {}
+    account_index: Dict[str, AccountCredentials] = {acc.account_id: acc for acc in accounts}
 
     for account in accounts:
         session = await proxy_handler.get_session(account)
@@ -149,7 +108,7 @@ async def main() -> None:
             account.exchange.value,
             RateLimitConfig(requests_per_minute=60, burst=5),
         )
-        clients[account.account_id] = await build_client(
+        clients_by_id[account.account_id] = await build_client(
             account,
             session,
             rate_cfg,
@@ -169,79 +128,55 @@ async def main() -> None:
             raise RuntimeError(f"at least one account required for {exchange_name.value}")
 
     stop_event = asyncio.Event()
-    tasks: List[asyncio.Task] = []
-    order_managers: List[OrderManager] = []
-    exchange_clients: Dict[ExchangeName, object] = {
-        ExchangeName.POLYMARKET: clients[account_pools[ExchangeName.POLYMARKET][0].account_id],
-        ExchangeName.OPINION: clients[account_pools[ExchangeName.OPINION][0].account_id],
-    }
-    def resolve_account(
-        exchange: ExchangeName,
-        desired_id: str | None,
-    ) -> AccountCredentials:
-        pool = account_pools[exchange]
-        if desired_id:
-            for account in pool:
-                if account.account_id == desired_id:
-                    return account
-            raise RuntimeError(f"account {desired_id} not found for exchange {exchange.value}")
-        return pool[0]
+    pair_controller = PairController(
+        settings=settings,
+        db=db,
+        position_tracker=position_tracker,
+        hedger=hedger,
+        risk_manager=risk_manager,
+        logger=logger,
+        stop_event=stop_event,
+        spread_analyzer=spread_analyzer,
+        orderbook_manager=orderbook_manager,
+        mapper=mapper,
+        notifier=notifier,
+        account_pools=account_pools,
+        clients_by_id=clients_by_id,
+    )
 
     if not settings.market_pairs:
         logger.warn("no market pairs configured; engine will idle")
 
-    for idx, pair in enumerate(settings.market_pairs):
-        if not pair.primary_market_id or not pair.secondary_market_id:
-            continue
-        primary_exchange = settings.exchanges.primary
-        secondary_exchange = settings.exchanges.secondary
-        primary_account = resolve_account(primary_exchange, pair.primary_account_id)
-        secondary_account = resolve_account(secondary_exchange, pair.secondary_account_id)
-        primary_client = clients[primary_account.account_id]
-        secondary_client = clients[secondary_account.account_id]
-        exchange_map = {
-            primary_exchange: primary_client,
-            secondary_exchange: secondary_client,
-        }
-        order_manager = OrderManager(
-            exchange_map,
-            db,
-            position_tracker,
-            hedger,
-            risk_manager,
-            logger,
-            settings.dry_run,
-            event_id=pair.event_id,
-            market_map={
-                primary_exchange: pair.primary_market_id,
-                secondary_exchange: pair.secondary_market_id,
-            },
-            mapper=mapper,
-        )
-        order_manager.set_routing(settings.exchanges.primary, settings.exchanges.secondary)
-        order_managers.append(order_manager)
-        tasks.append(
-            asyncio.create_task(
-                run_pair(
-                    f"pair-{idx}",
-                    pair,
-                    settings,
-                    primary_client,
-                    secondary_client,
-                    order_manager,
-                    spread_analyzer,
-                    orderbook_manager,
-                    stop_event,
-                    logger,
-                )
-            )
-        )
+    for pair in settings.market_pairs:
+        if pair.primary_market_id and pair.secondary_market_id:
+            await pair_controller.start_pair(pair, source="static")
+
+    sheet_client: Optional[GoogleSheetsClient] = None
+    sheet_task: Optional[asyncio.Task] = None
+    if settings.google_sheets.enabled:
+        sheet_client = GoogleSheetsClient(settings.google_sheets, logger=logger)
+        poll_interval = max(5, settings.google_sheets.poll_interval_sec)
+
+        async def _sheet_loop():
+            while not stop_event.is_set():
+                try:
+                    specs = await sheet_client.fetch_specs()
+                    await pair_controller.sync_sheet_pairs(specs)
+                    await pair_store.update_pairs([spec.pair_cfg for spec in specs.values()])
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    logger.warn("sheet sync failed", error=str(exc))
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=poll_interval)
+                except asyncio.TimeoutError:
+                    continue
+
+        sheet_task = asyncio.create_task(_sheet_loop())
 
     webhook_runner = None
     if settings.webhook.enabled:
         from scripts.webhook_server import create_app
 
-        app = await create_app(pair_store, sheet_sync, settings.webhook.admin_token or "")
+        app = await create_app(pair_store, sheet_sync_for_web, settings.webhook.admin_token or "")
         webhook_runner = web.AppRunner(app)
         await webhook_runner.setup()
         site = web.TCPSite(webhook_runner, settings.webhook.host, settings.webhook.port)
@@ -252,34 +187,13 @@ async def main() -> None:
             port=settings.webhook.port,
         )
 
-    async def dispatch_fill(fill):
-        for manager in order_managers:
-            if fill.market_id in manager.market_map.values():
-                await manager.handle_fill(fill.exchange, fill)
-                return
-        logger.warn("fill without order manager", market_id=fill.market_id, exchange=fill.exchange.value)
+    reconciler = Reconciler(db, pair_controller.dispatch_fill, logger)
+    connectivity_defaults = ExchangeConnectivity(use_websocket=False, poll_interval=5.0)
 
-    reconciler = Reconciler(db, dispatch_fill, logger)
-    connectivity_defaults = ExchangeConnectivity(use_websocket=True, poll_interval=5.0)
-
-    opinion_cfg = settings.connectivity.get(ExchangeName.OPINION, connectivity_defaults)
-    poly_cfg = settings.connectivity.get(ExchangeName.POLYMARKET, connectivity_defaults)
-
-    if opinion_cfg.use_websocket:
-        reconciler.subscribe_ws(
-            exchange_clients[ExchangeName.OPINION],
-            lambda payload: OrderManager.normalize_fill(ExchangeName.OPINION, payload),
-        )
-    else:
-        reconciler.register_poller(exchange_clients[ExchangeName.OPINION], opinion_cfg.poll_interval)
-
-    if poly_cfg.use_websocket:
-        reconciler.subscribe_ws(
-            exchange_clients[ExchangeName.POLYMARKET],
-            lambda payload: OrderManager.normalize_fill(ExchangeName.POLYMARKET, payload),
-        )
-    else:
-        reconciler.register_poller(exchange_clients[ExchangeName.POLYMARKET], poly_cfg.poll_interval)
+    for account_id, client in clients_by_id.items():
+        exchange = account_index[account_id].exchange
+        cfg = settings.connectivity.get(exchange, connectivity_defaults)
+        reconciler.register_poller(client, cfg.poll_interval)
 
     await reconciler.start()
 
@@ -291,18 +205,17 @@ async def main() -> None:
         wait_forever.cancel()
         logger.info("shutting down...")
     finally:
-        for om in order_managers:
-            om.stop()
-        await reconciler.stop()
-        for task in tasks:
-            task.cancel()
+        await pair_controller.shutdown()
+        if sheet_task:
+            sheet_task.cancel()
             with suppress(asyncio.CancelledError):
-                await task
+                await sheet_task
+        await reconciler.stop()
         if webhook_runner:
             await webhook_runner.cleanup()
-        if sheet_sync:
-            await sheet_sync.close()
-        for client in set(clients.values()):
+        if sheet_client:
+            await sheet_client.close()
+        for client in set(clients_by_id.values()):
             close = getattr(client, "close", None)
             if close:
                 await close()
@@ -313,4 +226,7 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
+
 
