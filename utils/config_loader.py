@@ -121,19 +121,32 @@ class ConfigLoader:
 
     def __init__(self, base_path: Path | None = None):
         self.base_path = base_path or Path(__file__).resolve().parent.parent
+        self._config_dir = self.base_path / "config"
+
+    def _resolve_config_file(self, filename: str, fallbacks: list[str] | None = None) -> Path:
+        candidates = [self._config_dir / filename]
+        if fallbacks:
+            candidates.extend(self._config_dir / name for name in fallbacks)
+        for path in candidates:
+            if path.exists():
+                return path
+        searched = ", ".join(str(path) for path in candidates)
+        raise FileNotFoundError(f"missing config file; searched: {searched}")
 
     def load_settings(self) -> Settings:
-        settings_path = self.base_path / "config" / "settings.yaml"
-        if not settings_path.exists():
-            raise FileNotFoundError(f"missing settings file at {settings_path}")
+        settings_path = self._resolve_config_file(
+            "settings.yaml",
+            ["settings.local.yaml", "settings.example.yaml", "settings.template.yaml"],
+        )
         with settings_path.open("r", encoding="utf-8") as handle:
             raw = yaml.safe_load(handle) or {}
         return self._parse_settings(raw)
 
     def load_accounts(self) -> List[AccountCredentials]:
-        accounts_path = self.base_path / "config" / "accounts.json"
-        if not accounts_path.exists():
-            raise FileNotFoundError(f"missing accounts file at {accounts_path}")
+        accounts_path = self._resolve_config_file(
+            "accounts.json",
+            ["accounts.local.json", "accounts.example.json", "accounts.template.json"],
+        )
         data = json.loads(accounts_path.read_text(encoding="utf-8"))
         accounts: List[AccountCredentials] = []
         for entry in data.get("accounts", []):

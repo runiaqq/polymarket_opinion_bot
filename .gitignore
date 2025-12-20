@@ -21,3 +21,15 @@ dist/
 .DS_Store
 Thumbs.db
 
+# Local configuration and secrets
+config/accounts.json
+config/settings.yaml
+config/*.local.*
+
+# Local data artifacts
+*.db
+data/market_hedge.db
+
+# Generated datasets that should stay local
+data/*.bak
+

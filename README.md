@@ -28,6 +28,15 @@ pip install -r requirements.txt
 
 ## Configuration
 
+Copy the provided templates and fill in your secrets locally (the real files are `.gitignore`d so they never reach Git). For example:
+
+```bash
+cp config/accounts.example.json config/accounts.json
+cp config/settings.example.yaml config/settings.yaml
+```
+
+> 🔒 **Security reminder**: rotate any credentials that were committed previously and use environment-specific overrides such as `config/accounts.local.json` if you need multiple setups. The loader automatically falls back to `.local` / `.example` files whenever the primary config is missing.
+
 ### `config/accounts.json`
 
 Provide every trading account with its exchange, API keys, and proxy:
