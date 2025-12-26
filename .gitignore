@@ -29,6 +29,8 @@ config/*.local.*
 # Local data artifacts
 *.db
 data/market_hedge.db
+diag_out*.txt
+diag_out.txt
 
 # Generated datasets that should stay local
 data/*.bak

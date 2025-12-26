@@ -5,7 +5,11 @@ from contextlib import suppress
 from typing import Dict, List, Optional
 
 from aiohttp import web
+from core.event_discovery.approvals import EventApprovalStore
+from core.event_discovery.registry import EventDiscoveryRegistry
+from core.event_discovery.service import EventDiscoveryService
 from core.hedger import Hedger
+from core.healthcheck import HealthcheckService
 from core.market_mapper import MarketMapper
 from core.models import AccountCredentials, ExchangeName
 from core.pair_controller import PairController
@@ -17,6 +21,8 @@ from exchanges.orderbook_manager import OrderbookManager
 from exchanges.polymarket_api import PolymarketAPI
 from exchanges.rate_limiter import RateLimiter
 from exchanges.reconciliation import Reconciler
+from telegram.commands import TelegramBotRunner, TelegramCommandRouter
+from telegram.event_review import EventReviewHandler
 from telegram.notifier import TelegramNotifier
 from utils.config_loader import (
     ConfigLoader,
@@ -79,6 +85,8 @@ async def main() -> None:
         chat_id=settings.telegram.chat_id,
         enabled=settings.telegram.enabled,
     )
+    approvals_store = EventApprovalStore()
+    discovery_registry = EventDiscoveryRegistry(approvals_store)
 
     if not settings.market_hedge_mode.enabled:
         logger.warn("market hedge mode disabled in settings.yaml; exiting")
@@ -127,6 +135,20 @@ async def main() -> None:
         if not pool:
             raise RuntimeError(f"at least one account required for {exchange_name.value}")
 
+    healthcheck = HealthcheckService(
+        spread_analyzer=spread_analyzer,
+        orderbook_manager=orderbook_manager,
+        account_pools=account_pools,
+        clients_by_id=clients_by_id,
+        fees=settings.fees,
+        logger=logger,
+    )
+    opinion_key: Optional[str] = None
+    for acc in account_pools[ExchangeName.OPINION]:
+        if acc.api_key:
+            opinion_key = acc.api_key
+            break
+
     stop_event = asyncio.Event()
     pair_controller = PairController(
         settings=settings,
@@ -143,6 +165,8 @@ async def main() -> None:
         account_pools=account_pools,
         clients_by_id=clients_by_id,
     )
+    telegram_runner: Optional[TelegramBotRunner] = None
+    heartbeat_task: Optional[asyncio.Task] = None
 
     if not settings.market_pairs:
         logger.warn("no market pairs configured; engine will idle")
@@ -197,6 +221,68 @@ async def main() -> None:
 
     await reconciler.start()
 
+    event_discovery_service = EventDiscoveryService(
+        config=settings.event_discovery,
+        registry=discovery_registry,
+        logger=logger,
+        opinion_api_key=opinion_key,
+        stop_event=stop_event,
+        poll_interval_sec=settings.event_discovery.poll_interval_sec,
+    )
+    await event_discovery_service.start()
+
+    event_review_handler = EventReviewHandler(
+        registry=discovery_registry,
+        approvals=approvals_store,
+        notifier=notifier,
+        logger=logger,
+    )
+
+    command_router = TelegramCommandRouter(
+        settings=settings,
+        pair_controller=pair_controller,
+        db=db,
+        reconciler=reconciler,
+        spread_analyzer=spread_analyzer,
+        notifier=notifier,
+        healthcheck=healthcheck,
+        account_pools=account_pools,
+        clients_by_id=clients_by_id,
+        account_index=account_index,
+        logger=logger,
+        event_review_handler=event_review_handler,
+    )
+    telegram_runner = TelegramBotRunner(
+        notifier=notifier,
+        router=command_router,
+        stop_event=stop_event,
+        logger=logger,
+        poll_interval=5,
+    )
+
+    async def _heartbeat_loop():
+        interval = max(60, settings.telegram.heartbeat_interval_sec)
+        while not stop_event.is_set():
+            try:
+                msg = await command_router.build_heartbeat()
+                await notifier.send_message(msg)
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.warn("heartbeat send failed", error=str(exc))
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=interval)
+            except asyncio.TimeoutError:
+                continue
+
+    if settings.telegram.enabled and notifier.enabled:
+        await telegram_runner.start()
+        startup_msg = (
+            f"Market-hedge bot started | dry_run={settings.dry_run} | pairs={len(settings.market_pairs)}\n"
+            "Commands: /status /health /simulate <pair_id> [size]"
+        )
+        await notifier.send_message(startup_msg)
+        if settings.telegram.heartbeat_enabled:
+            heartbeat_task = asyncio.create_task(_heartbeat_loop())
+
     wait_forever = asyncio.Future()
     try:
         await wait_forever
@@ -206,6 +292,12 @@ async def main() -> None:
         logger.info("shutting down...")
     finally:
         await pair_controller.shutdown()
+        if heartbeat_task:
+            heartbeat_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat_task
+        if telegram_runner:
+            await telegram_runner.stop()
         if sheet_task:
             sheet_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -215,6 +307,7 @@ async def main() -> None:
             await webhook_runner.cleanup()
         if sheet_client:
             await sheet_client.close()
+        await event_discovery_service.stop()
         for client in set(clients_by_id.values()):
             close = getattr(client, "close", None)
             if close:

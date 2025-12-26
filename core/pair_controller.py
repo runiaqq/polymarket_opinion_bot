@@ -67,6 +67,32 @@ class PairController:
     def list_order_managers(self) -> Iterable[OrderManager]:
         return (runtime.order_manager for runtime in self._pairs.values())
 
+    async def list_pairs(self) -> List[MarketPairConfig]:
+        async with self._lock:
+            return [runtime.config for runtime in self._pairs.values()]
+
+    async def snapshot(self) -> Dict[str, object]:
+        async with self._lock:
+            runtimes = list(self._pairs.values())
+        return {
+            "count": len(runtimes),
+            "pairs": [
+                {
+                    "pair_id": runtime.pair_id,
+                    "primary_market_id": runtime.config.primary_market_id,
+                    "secondary_market_id": runtime.config.secondary_market_id,
+                    "primary_exchange": (runtime.config.primary_exchange.value if runtime.config.primary_exchange else None),
+                    "secondary_exchange": (
+                        runtime.config.secondary_exchange.value if runtime.config.secondary_exchange else None
+                    ),
+                    "source": runtime.source,
+                    "size_override": runtime.size_override,
+                    "fingerprint": runtime.fingerprint,
+                }
+                for runtime in runtimes
+            ],
+        }
+
     async def start_pair(
         self,
         pair_cfg: MarketPairConfig,
@@ -338,7 +364,12 @@ async def run_pair_loop(
         try:
             await evaluate_once()
         except Exception as exc:  # pragma: no cover - defensive logging
-            logger.error("pair loop error", pair=pair_cfg.event_id, error=str(exc))
+            logger.error(
+                "pair loop error",
+                pair=pair_cfg.event_id,
+                error=repr(exc),
+                exc_type=exc.__class__.__name__,
+            )
             await asyncio.sleep(5)
         await asyncio.sleep(1)
 

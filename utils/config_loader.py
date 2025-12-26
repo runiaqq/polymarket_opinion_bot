@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -50,6 +50,8 @@ class TelegramConfig:
     enabled: bool
     token: Optional[str]
     chat_id: Optional[str]
+    heartbeat_enabled: bool = False
+    heartbeat_interval_sec: int = 900
 
 
 @dataclass(slots=True)
@@ -84,6 +86,23 @@ class WebhookConfig:
 
 
 @dataclass(slots=True)
+class DiscoveryLiquidity:
+    polymarket: float = 0.0
+    opinion: float = 0.0
+
+
+@dataclass(slots=True)
+class EventDiscoveryConfig:
+    enabled: bool = False
+    keywords_allow: List[str] = field(default_factory=list)
+    keywords_block: List[str] = field(default_factory=list)
+    min_liquidity: DiscoveryLiquidity = field(default_factory=DiscoveryLiquidity)
+    horizon_days_min: int = 0
+    horizon_days_max: int = 365
+    poll_interval_sec: int = 300
+
+
+@dataclass(slots=True)
 class MarketPairConfig:
     event_id: str
     primary_market_id: str
@@ -114,6 +133,7 @@ class Settings:
     rate_limits: Dict[str, RateLimitConfig]
     market_pairs: List[MarketPairConfig]
     connectivity: Dict[ExchangeName, ExchangeConnectivity]
+    event_discovery: EventDiscoveryConfig = field(default_factory=EventDiscoveryConfig)
 
 
 class ConfigLoader:
@@ -211,6 +231,8 @@ class ConfigLoader:
             enabled=bool(telegram_cfg.get("enabled", False)),
             token=telegram_cfg.get("token"),
             chat_id=telegram_cfg.get("chat_id"),
+            heartbeat_enabled=bool(telegram_cfg.get("heartbeat_enabled", False)),
+            heartbeat_interval_sec=int(telegram_cfg.get("heartbeat_interval_sec", 900)),
         )
 
         database = DatabaseConfig(
@@ -302,6 +324,21 @@ class ConfigLoader:
             admin_token=str(webhook_cfg.get("admin_token", "")),
         )
 
+        event_cfg = raw.get("event_discovery", {})
+        min_liq_cfg = event_cfg.get("min_liquidity", {})
+        event_discovery = EventDiscoveryConfig(
+            enabled=bool(event_cfg.get("enabled", False)),
+            keywords_allow=list(event_cfg.get("keywords_allow", [])),
+            keywords_block=list(event_cfg.get("keywords_block", [])),
+            min_liquidity=DiscoveryLiquidity(
+                polymarket=float(min_liq_cfg.get("polymarket", 0.0)),
+                opinion=float(min_liq_cfg.get("opinion", 0.0)),
+            ),
+            horizon_days_min=int(event_cfg.get("horizon_days_min", 0)),
+            horizon_days_max=int(event_cfg.get("horizon_days_max", 365)),
+            poll_interval_sec=int(event_cfg.get("poll_interval_sec", 300)),
+        )
+
         return Settings(
             market_hedge_mode=market,
             double_limit_enabled=bool(raw.get("double_limit_enabled", True)),
@@ -316,5 +353,6 @@ class ConfigLoader:
             market_pairs=pairs,
             connectivity=connectivity,
             scheduler_policy=str(raw.get("scheduler", {}).get("policy", "round_robin")).lower(),
+            event_discovery=event_discovery,
         )
 

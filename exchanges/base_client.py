@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timezone
 import random
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
@@ -34,6 +35,8 @@ class BaseExchangeClient(ABC):
         self.logger = logger or BotLogger(self.__class__.__name__)
         self.proxy = proxy
         self.max_retries = 5
+        self.last_orderbook_at: datetime | None = None
+        self.last_orderbook_error: str | None = None
 
     async def _request(
         self,

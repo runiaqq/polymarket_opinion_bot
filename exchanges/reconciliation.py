@@ -24,7 +24,13 @@ class Reconciler:
         self._tasks: List[asyncio.Task] = []
         self._stop = asyncio.Event()
         self._seen: set[str] = set()
-        self.metrics = {"ws_events": 0, "poll_events": 0, "duplicates": 0, "processed": 0}
+        self.metrics = {
+            "ws_events": 0,
+            "poll_events": 0,
+            "poll_cycles": 0,
+            "duplicates": 0,
+            "processed": 0,
+        }
 
     def subscribe_ws(self, exchange_client, decoder: FillDecoder) -> None:
         self._ws_sources.append((exchange_client, decoder))
@@ -61,6 +67,7 @@ class Reconciler:
         while not self._stop.is_set():
             try:
                 trades = await client.fetch_user_trades(since=since)
+                self.metrics["poll_cycles"] += 1
                 for fill in trades or []:
                     await self._process_fill(fill, source="poll")
                     if fill and fill.timestamp:
@@ -89,6 +96,10 @@ class Reconciler:
             return
         self._seen.add(key)
         self.metrics["processed"] += 1
+        if source == "ws":
+            self.metrics["ws_events"] += 1
+        elif source == "poll":
+            self.metrics["poll_events"] += 1
         await self.handler(fill)
 
     def _fill_key(self, fill: Fill) -> str:

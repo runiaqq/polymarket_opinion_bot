@@ -1,0 +1,4 @@
+- Secrets are no longer committed: `config/accounts.json`, `config/settings.yaml`, and `data/market_hedge.db` stay local via `.gitignore`.
+- Example templates (`config/accounts.example.json`, `config/settings.example.yaml`) document required fields without tokens.
+- Config loader resolves `.local`/`.example`/`.template` fallbacks so CI/tests keep running without private credentials.
+- Diagnostic artifacts like `diag_out*.txt` stay local (also ignored) to avoid leaking discovery summaries.

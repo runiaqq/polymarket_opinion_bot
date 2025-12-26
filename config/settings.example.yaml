@@ -27,6 +27,8 @@ telegram:
   enabled: false
   token: "YOUR_TELEGRAM_BOT_TOKEN"
   chat_id: "YOUR_TELEGRAM_CHAT_ID"
+  heartbeat_enabled: false
+  heartbeat_interval_sec: 900
 
 rate_limits:
   Opinion:
@@ -43,6 +45,23 @@ connectivity:
   Polymarket:
     use_websocket: false
     poll_interval: 5
+
+event_discovery:
+  enabled: true
+  keywords_allow:
+    - fed
+    - interest
+    - inflation
+    - election
+  keywords_block:
+    - sports
+    - crypto price
+  min_liquidity:
+    polymarket: 5000
+    opinion: 3000
+  horizon_days_min: 3
+  horizon_days_max: 365
+  poll_interval_sec: 300
 
 google_sheets:
   enabled: false

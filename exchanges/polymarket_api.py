@@ -70,16 +70,23 @@ class PolymarketAPI(BaseExchangeClient):
 
     async def get_orderbook(self, market_id: str) -> OrderBook:
         try:
-            data = await self._request("GET", "/book", params={"token_id": market_id}, auth=False)
-        except Exception:
-            data = await self._request("GET", f"/markets/{market_id}/orderbook", auth=False)
-        bids = [
-            {"price": float(b.get("price", 0)), "size": float(b.get("size", b.get("amount", 0)))} for b in data.get("bids", [])
-        ]
-        asks = [
-            {"price": float(a.get("price", 0)), "size": float(a.get("size", a.get("amount", 0)))} for a in data.get("asks", [])
-        ]
-        return self.orderbooks.parse_orderbook(market_id, bids, asks)
+            try:
+                data = await self._request("GET", "/book", params={"token_id": market_id}, auth=False)
+            except Exception:
+                data = await self._request("GET", f"/markets/{market_id}/orderbook", auth=False)
+            bids = [
+                {"price": float(b.get("price", 0)), "size": float(b.get("size", b.get("amount", 0)))} for b in data.get("bids", [])
+            ]
+            asks = [
+                {"price": float(a.get("price", 0)), "size": float(a.get("size", a.get("amount", 0)))} for a in data.get("asks", [])
+            ]
+            orderbook = self.orderbooks.parse_orderbook(market_id, bids, asks)
+            self.last_orderbook_at = datetime.now(tz=timezone.utc)
+            self.last_orderbook_error = None
+            return orderbook
+        except Exception as exc:
+            self.last_orderbook_error = str(exc)
+            raise
 
     async def place_limit_order(
         self,

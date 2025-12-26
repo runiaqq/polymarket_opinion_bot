@@ -83,15 +83,22 @@ class OpinionAPI(BaseExchangeClient):
         url = "https://openapi.opinion.trade/openapi/token/orderbook"
         headers = {"apikey": self.api_key}
         params = {"token_id": token_id}
-        async with self.session.get(url, headers=headers, params=params, proxy=self.proxy, timeout=30) as resp:
-            if resp.status != 200:
-                text = await resp.text()
-                raise FatalExchangeError(f"unexpected response: {text}")
-            data = await resp.json()
-        payload = data.get("result") or data.get("data") or data
-        bids = [{"price": float(b.get("price", 0)), "size": float(b.get("amount", b.get("size", 0)))} for b in payload.get("bids", [])]
-        asks = [{"price": float(a.get("price", 0)), "size": float(a.get("amount", a.get("size", 0)))} for a in payload.get("asks", [])]
-        return self.orderbooks.parse_orderbook(token_id, bids, asks)
+        try:
+            async with self.session.get(url, headers=headers, params=params, proxy=self.proxy, timeout=30) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise FatalExchangeError(f"unexpected response: {text}")
+                data = await resp.json()
+            payload = data.get("result") or data.get("data") or data
+            bids = [{"price": float(b.get("price", 0)), "size": float(b.get("amount", b.get("size", 0)))} for b in payload.get("bids", [])]
+            asks = [{"price": float(a.get("price", 0)), "size": float(a.get("amount", a.get("size", 0)))} for a in payload.get("asks", [])]
+            orderbook = self.orderbooks.parse_orderbook(token_id, bids, asks)
+            self.last_orderbook_at = datetime.now(tz=timezone.utc)
+            self.last_orderbook_error = None
+            return orderbook
+        except Exception as exc:
+            self.last_orderbook_error = str(exc)
+            raise
 
     async def place_limit_order(
         self,

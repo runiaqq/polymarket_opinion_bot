@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from core.models import ExchangeName, OrderBook, OrderSide, StrategyDirection
@@ -18,6 +19,7 @@ class SpreadAnalyzer:
 
     def __init__(self):
         self.orderbooks = OrderbookManager()
+        self.last_sample: Optional[Dict[str, Any]] = None
 
     async def compute_spread(self, primary: OrderBook, secondary: OrderBook) -> float:
         best_bid = await self.orderbooks.best_bid(secondary)
@@ -118,8 +120,25 @@ class SpreadAnalyzer:
         if forced_direction:
             scenarios = [s for s in scenarios if _matches_direction(s["direction"], forced_direction)]
         if not scenarios:
+            self.last_sample = {
+                "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+                "primary_ask": best_primary_ask.price if best_primary_ask else None,
+                "primary_bid": best_primary_bid.price if best_primary_bid else None,
+                "secondary_ask": best_secondary_ask.price if best_secondary_ask else None,
+                "secondary_bid": best_secondary_bid.price if best_secondary_bid else None,
+                "scenario": None,
+            }
             return None
-        return max(scenarios, key=lambda entry: entry["net_total"])
+        scenario = max(scenarios, key=lambda entry: entry["net_total"])
+        self.last_sample = {
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            "primary_ask": best_primary_ask.price if best_primary_ask else None,
+            "primary_bid": best_primary_bid.price if best_primary_bid else None,
+            "secondary_ask": best_secondary_ask.price if best_secondary_ask else None,
+            "secondary_bid": best_secondary_bid.price if best_secondary_bid else None,
+            "scenario": scenario,
+        }
+        return scenario
 
     def _fee_value(self, fees: Any, attr: str) -> float:
         if fees is None:

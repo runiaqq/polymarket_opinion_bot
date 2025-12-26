@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timezone
+import uuid
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, List
@@ -34,6 +35,8 @@ class Database:
         self._pool: Optional[asyncpg.Pool] = None
         self._lock = asyncio.Lock()
         self._in_transaction = False
+        self.last_write_ts: Optional[datetime] = None
+        self.connected: bool = False
 
     async def init(self) -> None:
         if self.backend.startswith("sqlite"):
@@ -46,6 +49,7 @@ class Database:
         else:
             raise ValueError(f"Unsupported database backend {self.backend}")
         self.logger.info("database initialized", backend=self.backend)
+        self.connected = True
 
     async def close(self) -> None:
         if self._conn:
@@ -328,6 +332,39 @@ class Database:
             {"level": level, "message": message, "details": json.dumps(details)},
         )
 
+    async def record_simulated_run(
+        self,
+        pair_id: str,
+        size: float,
+        plan: Dict[str, Any],
+        expected_pnl: Optional[float],
+        notes: str | None = None,
+    ) -> str:
+        record_id = uuid.uuid4().hex
+        await self._execute(
+            """
+            INSERT INTO simulated_runs (id, ts, pair_id, size, plan_json, expected_pnl, notes)
+            VALUES (:id, :ts, :pair_id, :size, :plan_json, :expected_pnl, :notes)
+            """,
+            {
+                "id": record_id,
+                "ts": datetime.now(tz=timezone.utc).isoformat(),
+                "pair_id": pair_id,
+                "size": size,
+                "plan_json": json.dumps(plan, default=str),
+                "expected_pnl": expected_pnl,
+                "notes": notes,
+            },
+        )
+        return record_id
+
+    def status_snapshot(self) -> Dict[str, Any]:
+        return {
+            "backend": self.backend,
+            "connected": self.connected,
+            "last_write": self.last_write_ts.isoformat() if self.last_write_ts else None,
+        }
+
     async def fetch_fill_keys(self) -> set[str]:
         rows = await self._fetchall(
             """
@@ -351,11 +388,13 @@ class Database:
                 await self._conn.execute(sql, params)
                 if not self._in_transaction:
                     await self._conn.commit()
+                self.last_write_ts = datetime.now(tz=timezone.utc)
             else:
                 assert self._pool is not None
                 formatted, values = self._format_pg(sql, params)
                 async with self._pool.acquire() as conn:
                     await conn.execute(formatted, *values)
+                self.last_write_ts = datetime.now(tz=timezone.utc)
 
     async def _fetchone(self, sql: str, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         async with self._lock:
